@@ -4,6 +4,8 @@ import socket
 from PIL import Image, ImageTk
 import io
 import threading
+import os
+import time
 
 # Configuration
 UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
@@ -55,6 +57,13 @@ def send_image_over_udp(image_path):
             image.save(byte_stream, format='PNG')
             byte_data = byte_stream.getvalue()
 
+        # Extract the file name from the path
+        file_name = os.path.basename(image_path)
+
+        # Send the file name first
+        header = f'IMG_FILE_NAME_{file_name}'.encode()
+        sock.sendto(header, (UDP_IP, UDP_PORT))
+
         # Split byte_data into chunks
         total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
         for i in range(total_chunks):
@@ -76,11 +85,18 @@ def send_image_over_udp(image_path):
 # Function to handle incoming messages
 def receive():
     received_chunks = {}  # Dictionary to store received chunks
+    file_name = None  # Variable to store the file name
     while True:
         try:
             data, addr = sock.recvfrom(65535)  # Buffer size
             sender_ip = addr[0]
-            if data.startswith(b'IMG_CHUNK_'):
+            
+            if data.startswith(b'IMG_FILE_NAME_'):
+                # Extract and store the file name
+                file_name = data.decode().split('IMG_FILE_NAME_')[1]
+                print(f"Received file name: {file_name}")
+
+            elif data.startswith(b'IMG_CHUNK_'):
                 # Extract header and chunk data
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
@@ -115,6 +131,10 @@ def receive():
 
                         # Keep a reference to avoid garbage collection
                         image_references.append(photo)
+
+                        # Bind click event to save image with the file name
+                        chat_log.bind("<Button-1>", lambda e: save_image_on_click(e, complete_image_data, file_name))
+
                     except Exception as e:
                         print(f"Error displaying image: {e}")
 
@@ -134,6 +154,21 @@ def receive():
 
         except Exception as e:
             print(f"Error receiving data: {e}")
+
+# Function to save image when clicked
+def save_image_on_click(event, image_data, file_name):
+    try:
+        # Use the file name received from the sender
+        default_filename = file_name if file_name else f"image_{int(time.time())}.png"
+        
+        # Open save file dialog with default file name
+        file_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG files", "*.png")], initialfile=default_filename)
+        if file_path:
+            with open(file_path, 'wb') as file:
+                file.write(image_data)
+            print(f"Image saved as {file_path}")
+    except Exception as e:
+        print(f"Error saving image: {e}")
 
 # Setup GUI
 root = tk.Tk()
