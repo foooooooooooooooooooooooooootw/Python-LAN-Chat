@@ -8,10 +8,13 @@ import threading
 # Configuration
 UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
 UDP_PORT = 12345
-CHUNK_SIZE = 65507  # Max UDP payload size minus protocol overhead
+CHUNK_SIZE = 64000  # Safe size for chunks
 
 # Get local IP address
 LOCAL_IP = socket.gethostbyname(socket.gethostname())
+
+# List to store references to PhotoImage objects
+image_references = []
 
 # Function to send text messages
 def send_message(event=None):
@@ -26,11 +29,28 @@ def send_image():
     if file_path:
         send_image_over_udp(file_path)
 
+# Function to resize image if necessary
+def resize_image_if_necessary(image):
+    width, height = image.size
+    max_dimension = 400
+    if width > max_dimension or height > max_dimension:
+        if width > height:
+            new_width = max_dimension
+            new_height = int((max_dimension / width) * height)
+        else:
+            new_height = max_dimension
+            new_width = int((max_dimension / height) * width)
+        image = image.resize((new_width, new_height), Image.LANCZOS)
+    return image
+
 # Function to send image over UDP
 def send_image_over_udp(image_path):
     try:
-        # Open image and convert to byte stream
+        # Open image and resize if necessary
         image = Image.open(image_path)
+        image = resize_image_if_necessary(image)
+
+        # Convert image to byte stream
         with io.BytesIO() as byte_stream:
             image.save(byte_stream, format='PNG')
             byte_data = byte_stream.getvalue()
@@ -45,6 +65,7 @@ def send_image_over_udp(image_path):
             packet = chunk_header + b'\n' + chunk
             try:
                 sock.sendto(packet, (UDP_IP, UDP_PORT))
+                print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
             except Exception as e:
                 print(f"Error sending packet {i}: {e}")
 
@@ -64,35 +85,41 @@ def receive():
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
                 received_chunks[index] = chunk
-                
+
+                print(f"Received chunk {index}/{total}")  # Debugging
+
                 if len(received_chunks) == total:
                     # Reassemble image
                     complete_image_data = b''.join(received_chunks[i] for i in range(total))
                     received_chunks.clear()
                     
                     # Convert byte stream back to image and display
-                    image = Image.open(io.BytesIO(complete_image_data))
-                    image.thumbnail((200, 200))  # Resize for display
-                    photo = ImageTk.PhotoImage(image)
+                    try:
+                        print("Reassembling image...")
+                        image = Image.open(io.BytesIO(complete_image_data))
+                        image = resize_image_if_necessary(image)  # Resize if necessary
+                        photo = ImageTk.PhotoImage(image)
 
-                    # Display image in the chat log
-                    chat_log.config(state=tk.NORMAL)
-                    if sender_ip == LOCAL_IP:
-                        chat_log.insert(tk.END, f"{sender_ip}(you):\n")
-                        chat_log.image_create(tk.END, image=photo)
-                        chat_log.insert(tk.END, '\n')  
-                    else:
-                        chat_log.insert(tk.END, f"{sender_ip}: \n")
-                        chat_log.image_create(tk.END, image=photo)
-                        chat_log.insert(tk.END, '\n')  
-                    chat_log.config(state=tk.DISABLED)
-                    chat_log.yview(tk.END)
+                        # Display image in the chat log
+                        chat_log.config(state=tk.NORMAL)
+                        if sender_ip == LOCAL_IP:
+                            chat_log.insert(tk.END, f"{sender_ip}(you):\n")
+                            chat_log.image_create(tk.END, image=photo)
+                            chat_log.insert(tk.END, '\n')  
+                        else:
+                            chat_log.insert(tk.END, f"{sender_ip}: \n")
+                            chat_log.image_create(tk.END, image=photo)
+                            chat_log.insert(tk.END, '\n')  
+                        chat_log.config(state=tk.DISABLED)
+                        chat_log.yview(tk.END)
 
-                    # Keep a reference to avoid garbage collection
-                    chat_log.image = photo
+                        # Keep a reference to avoid garbage collection
+                        image_references.append(photo)
+                    except Exception as e:
+                        print(f"Error displaying image: {e}")
 
             elif data == b'IMG_END':
-                pass  # End of image transmission
+                print("Image transmission ended.")  # Debugging
 
             else:
                 # Handle text messages with sender IP
@@ -141,6 +168,10 @@ root.bind('<Return>', send_message)
 # Setup UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('', UDP_PORT))
+
+# Increase socket buffer size
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65535)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65535)
 
 # Start receiving thread
 recv_thread = threading.Thread(target=receive, daemon=True)
