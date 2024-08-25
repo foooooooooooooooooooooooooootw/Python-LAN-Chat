@@ -23,10 +23,13 @@ image_references = []
 PLACEHOLDER_IMAGE_URL = 'https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/doc.png'
 APP_DATA_PATH = os.path.join(os.getenv('APPDATA', ''), 'PythonLANChat') if os.name == 'nt' else os.path.expanduser('~/.PythonLANChat')
 
+ICON_URL = 'https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/pythonlanchat.ico'
+
 # Ensure the local folder exists
 os.makedirs(APP_DATA_PATH, exist_ok=True)
 
 PLACEHOLDER_IMAGE_PATH = os.path.join(APP_DATA_PATH, 'doc.png')
+ICON_PATH = os.path.join(APP_DATA_PATH, 'pythonlanchat.ico')
 
 # Download the placeholder image if not already downloaded
 def download_placeholder_image():
@@ -41,6 +44,19 @@ def download_placeholder_image():
             print(f"Error downloading placeholder image: {e}")
 
 download_placeholder_image()
+
+def download_icon():
+    if not os.path.exists(ICON_PATH):
+        try:
+            response = requests.get(ICON_URL)
+            response.raise_for_status()
+            with open(ICON_PATH, 'wb') as f:
+                f.write(response.content)
+            print("Icon downloaded.")
+        except Exception as e:
+            print(f"Error downloading Icon: {e}")
+
+download_icon()
 
 # Function to send text messages
 def send_message(event=None):
@@ -327,6 +343,8 @@ def save_document_on_click(event, file_data, file_name):
 # Setup GUI
 root = tk.Tk()
 root.title("Pyton LAN Chat")
+
+root.iconbitmap(ICON_PATH)
 
 frame = tk.Frame(root)
 frame.pack(padx=10, pady=10)
