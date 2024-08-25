@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="200" height="200" src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/pythonlanchat.ico?raw=true">
+</p>
+
 # Python-LAN-Chat
 A simple python GUI chat program that broadcasts on LAN with UDP. 
 
@@ -7,7 +11,9 @@ Just open the program on any computers you have and all of them will receive the
 
 The program does connect to the internet to download 1 icon and 1 placeholder image for files hosted on this repository, after which on subsequent startups it checks if the files exist and if they do should not connect to the internet anymore. 
 
-On windows files are saved to AppData/Local/PythonLANChat.
+On windows resource files are saved to AppData/Local/PythonLANChat.
+
+This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (routers, extenders, wireless access points, walls between device and access point) your mileage may vary.
 
 
 # FAQ
