@@ -2,7 +2,7 @@
   <img width="200" height="200" src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/pythonlanchat.ico?raw=true">
 </p>
 
-# Python-LAN-Chat
+# Python LAN Chat
 A simple python GUI chat program that broadcasts on LAN with UDP. 
 
 It also listens on LAN on port 12345, so anything sent there will be recorded.
