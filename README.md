@@ -15,6 +15,8 @@ On windows resource files are saved to AppData/Local/PythonLANChat.
 
 This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (routers, extenders, wireless access points, walls between device and access point) your mileage may vary.
 
+Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption. Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
+
 
 # FAQ
 ### Why?
