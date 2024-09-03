@@ -18,6 +18,10 @@ This was tested on my home network with wired connections & no packet loss, so d
 Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption. Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
 
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/staticdemo.png">
+</p>
+
 # FAQ
 ### Why?
 After trying to send text or images to another computer on the same network many times, I realized it was a huge pain and we should not have to rely on messaging services like whatsapp or telegram just to send things around. What if internet connection wasn't available?
