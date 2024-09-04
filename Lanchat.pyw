@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog
+from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
 from PIL import Image, ImageTk
 import io
@@ -7,6 +8,22 @@ import threading
 import os
 import requests
 import time
+import subprocess
+import sys
+
+# Function to check and install missing dependencies
+def check_and_install(package):
+    try:
+        __import__(package)
+    except ImportError:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+
+def install_dependencies():
+    packages = ['Pillow', 'tkinterdnd2']
+    for package in packages:
+        check_and_install(package)
+
+install_dependencies()
 
 # Configuration
 UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
@@ -340,9 +357,18 @@ def save_document_on_click(event, file_data, file_name):
     except Exception as e:
         print(f"Error saving document: {e}")
 
+# Function to handle file drop
+def on_drop(event):
+    files = root.tk.splitlist(event.data)
+    for file in files:
+        if file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.tga', '.tiff', '.ico')):
+            send_image_over_udp(file)
+        else:
+            send_document_over_udp(file)
+
 # Setup GUI
-root = tk.Tk()
-root.title("Pyton LAN Chat")
+root = TkinterDnD.Tk()  # Use TkinterDnD.Tk() instead of tk.Tk()
+root.title("Python LAN Chat")
 
 root.iconbitmap(ICON_PATH)
 
@@ -350,18 +376,17 @@ frame = tk.Frame(root)
 frame.pack(padx=10, pady=10)
 
 chat_log = tk.Text(frame, height=20, width=65, state=tk.DISABLED)
-chat_log.pack(side=tk.LEFT)
+chat_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 scrollbar = tk.Scrollbar(frame, command=chat_log.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 chat_log.config(yscrollcommand=scrollbar.set)
 
-# Frame for entry and buttons
 input_frame = tk.Frame(root)
-input_frame.pack(pady=5, padx=10)
+input_frame.pack(pady=5, padx=10, fill=tk.X)
 
 entry = tk.Entry(input_frame, width=50)
-entry.pack(side=tk.LEFT)
+entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
 send_button = tk.Button(input_frame, text=">>>", command=send_message)
 send_button.pack(side=tk.LEFT, padx=5)
@@ -372,8 +397,11 @@ send_image_button.pack(side=tk.LEFT, padx=5)
 send_document_button = tk.Button(input_frame, text="Send Document", command=send_document)
 send_document_button.pack(side=tk.LEFT, padx=5)
 
-# Bind Enter key to send_message function
 root.bind('<Return>', send_message)
+
+# Enable drag-and-drop for the chat_log widget
+chat_log.drop_target_register(DND_FILES)
+chat_log.dnd_bind('<<Drop>>', on_drop)
 
 # Setup UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
