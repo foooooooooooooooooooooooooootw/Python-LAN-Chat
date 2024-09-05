@@ -1,13 +1,3 @@
-import tkinter as tk
-from tkinter import filedialog
-from tkinterdnd2 import TkinterDnD, DND_FILES
-import socket
-from PIL import Image, ImageTk
-import io
-import threading
-import os
-import requests
-import time
 import subprocess
 import sys
 
@@ -19,11 +9,23 @@ def check_and_install(package):
         subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
 
 def install_dependencies():
-    packages = ['Pillow', 'tkinterdnd2']
+    packages = ['Pillow', 'tkinterdnd2', 'requests']
     for package in packages:
         check_and_install(package)
 
 install_dependencies()
+
+import tkinter as tk
+from tkinter import filedialog
+from tkinterdnd2 import TkinterDnD, DND_FILES
+import socket
+from PIL import Image, ImageTk
+import io
+import threading
+import os
+import requests
+import time
+
 
 # Configuration
 UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
