@@ -19,7 +19,7 @@ Point to note: this presumes your network is secure and no one is listening in o
 
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/staticdemo.png">
+  <img src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/staticdemo.jpg">
 </p>
 
 # FAQ
