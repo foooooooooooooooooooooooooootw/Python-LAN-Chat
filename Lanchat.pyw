@@ -26,7 +26,6 @@ import os
 import requests
 import time
 
-
 # Configuration
 UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
 UDP_PORT = 12345
@@ -245,20 +244,23 @@ def receive():
                         chat_log.config(state=tk.NORMAL)
                         if sender_ip == LOCAL_IP:
                             chat_log.insert(tk.END, f"{sender_ip} (you):\n")
-                            chat_log.image_create(tk.END, image=photo)
-                            chat_log.insert(tk.END, '\n')  
                         else:
                             chat_log.insert(tk.END, f"{sender_ip}: \n")
-                            chat_log.image_create(tk.END, image=photo)
-                            chat_log.insert(tk.END, '\n')  
+
+                        # Assign a unique tag for the image
+                        tag_name = f"image_{len(image_references)}"
+                        chat_log.image_create(tk.END, image=photo)
+                        chat_log.insert(tk.END, '\n')
+                        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
+
                         chat_log.config(state=tk.DISABLED)
                         chat_log.yview(tk.END)
 
                         # Keep a reference to avoid garbage collection
                         image_references.append(photo)
 
-                        # Bind click event to save image with the file name
-                        chat_log.bind("<Button-1>", lambda e: save_image_on_click(e, complete_image_data, file_name))
+                        # Bind click event to save the specific image with the file name
+                        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_image_data, name=file_name: save_image_on_click(e, data, name))
 
                     except Exception as e:
                         print(f"Error displaying image: {e}")
@@ -287,21 +289,24 @@ def receive():
                         if sender_ip == LOCAL_IP:
                             chat_log.insert(tk.END, f"{sender_ip} (you):\n")
                             chat_log.insert(tk.END, f"{file_name}\n")
-                            chat_log.image_create(tk.END, image=photo)
-                            chat_log.insert(tk.END, '\n')  
                         else:
                             chat_log.insert(tk.END, f"{sender_ip}: \n")
                             chat_log.insert(tk.END, f"{file_name}\n")
-                            chat_log.image_create(tk.END, image=photo)
-                            chat_log.insert(tk.END, '\n')  
+
+                        # Assign a unique tag for the placeholder
+                        tag_name = f"doc_{len(image_references)}"
+                        chat_log.image_create(tk.END, image=photo)
+                        chat_log.insert(tk.END, '\n')
+                        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
+
                         chat_log.config(state=tk.DISABLED)
                         chat_log.yview(tk.END)
 
                         # Keep a reference to avoid garbage collection
                         image_references.append(photo)
 
-                        # Bind click event to save document with the file name
-                        chat_log.bind("<Button-1>", lambda e: save_document_on_click(e, complete_doc_data, file_name))
+                        # Bind click event to save the specific document with the file name
+                        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
 
                     except Exception as e:
                         print(f"Error displaying placeholder: {e}")
