@@ -1,4 +1,7 @@
-#V2.3 18/9/24
+#V2.4 18/9/24
+#TODO add settings? settings should include colours of windows, text, etc. Maybe even settings on where the files are saved. 
+#TODO add video player?
+
 import subprocess
 import sys
 
@@ -83,6 +86,7 @@ def send_message(event=None):
     if message:
         sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
         entry.delete(0, tk.END)
+        print(f"Sent message: {message}")  # Debug statement
 
 # Function to open file dialog and send image
 def send_image():
@@ -156,17 +160,6 @@ def send_document_over_udp(file_path):
         header = f'DOC_FILE_NAME_{file_name}'.encode()
         sock.sendto(header, (UDP_IP, UDP_PORT))
 
-        # Send the placeholder image
-        placeholder_image = Image.open(PLACEHOLDER_IMAGE_PATH)
-        placeholder_image = placeholder_image.resize((133, 200), Image.LANCZOS)
-        with io.BytesIO() as byte_stream:
-            placeholder_image.save(byte_stream, format='PNG')
-            placeholder_data = byte_stream.getvalue()
-
-        # Send the placeholder image
-        placeholder_header = f'DOC_PLACEHOLDER_{file_name}'.encode()
-        sock.sendto(placeholder_header, (UDP_IP, UDP_PORT))
-
         # Split file_data into chunks
         total_chunks = (len(file_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
         for i in range(total_chunks):
@@ -185,17 +178,16 @@ def send_document_over_udp(file_path):
     except Exception as e:
         print(f"Error sending document: {e}")
 
-# Function to handle incoming messages
 def receive():
-    received_chunks = {}  # Dictionary to store received chunks
-    file_name = None  # Variable to store the file name
+    received_chunks = {}
+    file_name = None
     is_image = False
     is_gif = False
     is_document = False
 
     while True:
         try:
-            data, addr = sock.recvfrom(65535)  # Buffer size
+            data, addr = sock.recvfrom(65535)
             sender_ip = addr[0]
 
             if data.startswith(b'IMG_FILE_NAME_'):
@@ -211,70 +203,94 @@ def receive():
                 print(f"Received GIF file name: {file_name}")
 
             elif data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_'):
-                # Handle image or GIF chunks the same way
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
                 received_chunks[index] = chunk
-
                 print(f"Received image/GIF chunk {index}/{total}")
 
                 if len(received_chunks) == total:
-                    # Reassemble the complete image or GIF data
                     complete_data = b''.join(received_chunks[i] for i in range(total))
                     received_chunks.clear()
 
                     try:
                         if is_gif:
-                            # Do not process the original GIF; just display it and pass the original data
-                            display_gif(None, sender_ip, file_name, complete_data)  # Passing original GIF data
+                            display_gif(None, sender_ip, file_name, complete_data)
                         else:
-                            # Process and display static images
                             image = Image.open(io.BytesIO(complete_data))
-                            display_static_image(image, sender_ip, file_name, complete_data)  # Pass original image data
+                            display_static_image(image, sender_ip, file_name, complete_data)
                     except Exception as e:
                         print(f"Error displaying image/GIF: {e}")
+
+            elif data.startswith(b'DOC_FILE_NAME_'):
+                file_name = data.decode().split('DOC_FILE_NAME_')[1]
+                is_document = True
+                print(f"Received document file name: {file_name}")
+
+            elif data.startswith(b'DOC_CHUNK_'):
+                header, chunk = data.split(b'\n', 1)
+                index, total = map(int, header.decode().split('_')[2:])
+                received_chunks[index] = chunk
+
+                if len(received_chunks) == total:
+                    complete_data = b''.join(received_chunks[i] for i in range(total))
+                    received_chunks.clear()
+
+                    # Display a placeholder and metadata for the document
+                    display_document_placeholder(file_name, sender_ip, complete_data)
 
             elif data == b'IMG_END':
                 print("Image transmission ended.")
 
+            elif not is_image and not is_gif and not is_document:
+                # Handle as text message
+                message = data.decode()
+                chat_log.config(state=tk.NORMAL)
+                if sender_ip == LOCAL_IP:
+                    chat_log.insert(tk.END, f"{sender_ip} (you): {message} \n")
+                else:
+                    chat_log.insert(tk.END, f"{sender_ip}: {message} \n")
+                chat_log.config(state=tk.DISABLED)
+                chat_log.yview(tk.END)
+                print(f"Received message: {message}")
+
         except Exception as e:
             print(f"Error receiving data: {e}")
 
-
-
 def display_document_placeholder(file_name, sender_ip, complete_doc_data):
     try:
-        # Open and resize the placeholder image
-        placeholder_image = Image.open(PLACEHOLDER_IMAGE_PATH)
+        # Load and resize the placeholder image
+        placeholder_image_path = os.path.join(APP_DATA_PATH, 'doc.png')
+        placeholder_image = Image.open(placeholder_image_path)
         placeholder_image = placeholder_image.resize((133, 200), Image.LANCZOS)
         photo = ImageTk.PhotoImage(placeholder_image)
 
-        # Display placeholder in the chat log
+        # Display the placeholder image in the chat log
         chat_log.config(state=tk.NORMAL)
         if sender_ip == LOCAL_IP:
             chat_log.insert(tk.END, f"{sender_ip} (you):\n")
-            chat_log.insert(tk.END, f"{file_name}\n")
-            auto_scroll_chat_log()   
         else:
             chat_log.insert(tk.END, f"{sender_ip}: \n")
-            chat_log.insert(tk.END, f"{file_name}\n")
-            auto_scroll_chat_log()   
 
-        # Assign a unique tag for the placeholder
-        tag_name = f"doc_{len(image_references)}"
-        chat_log.image_create(tk.END, image=photo)
+        # Add a Label for the placeholder image
+        img_label = tk.Label(chat_log, image=photo, bg=chat_log.cget('bg'), bd=0, highlightthickness=0)
+        chat_log.window_create(tk.END, window=img_label)
         chat_log.insert(tk.END, '\n')
-        auto_scroll_chat_log()   
-        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
+
+        # Add gray text metadata below the image
+        file_size_kb = len(complete_doc_data) / 1024  # Calculate file size in KB
+        metadata_text = f"{file_name} - {file_size_kb:.2f} KB"
+        chat_log.insert(tk.END, metadata_text + "\n", "gray")
+        chat_log.tag_configure("gray", foreground="gray")
 
         chat_log.config(state=tk.DISABLED)
         chat_log.yview(tk.END)
+        auto_scroll_chat_log()
 
         # Keep a reference to avoid garbage collection
         image_references.append(photo)
 
-        # Bind click event to save the specific document with the file name
-        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
+        # Bind the click event to the image label
+        img_label.bind("<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
 
     except Exception as e:
         print(f"Error displaying document placeholder: {e}")
@@ -287,6 +303,10 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         # Convert the resized image to a PhotoImage object for display
         photo = ImageTk.PhotoImage(resized_image)
 
+        # Extract original resolution and file size
+        original_width, original_height = image.size
+        file_size_kb = len(original_image_data) / 1024  # File size in KB
+
         # Insert a label into the chat log where the image will be displayed
         chat_log.config(state=tk.NORMAL)
         if sender_ip == LOCAL_IP:
@@ -297,17 +317,25 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         img_label = tk.Label(chat_log, image=photo)
         chat_log.window_create(tk.END, window=img_label)
         chat_log.insert(tk.END, '\n')
+
+        # Add a gray text label for file metadata below the image
+        metadata_text = f"{file_name} - {file_size_kb:.2f} KB - {original_width}x{original_height} pixels"
+        chat_log.insert(tk.END, metadata_text + "\n", "gray")
+
+        # Define the style for gray-colored text
+        chat_log.tag_configure("gray", foreground="gray")
+
         chat_log.config(state=tk.DISABLED)
         chat_log.yview(tk.END)
+        auto_scroll_chat_log()
 
         # Keep a reference to avoid garbage collection
         image_references.append(photo)
 
         # Add a click event to save the original image when clicked
         def save_image(event):
-            # Get the file extension (e.g., ".jpg", ".png") from the file_name
             _, file_extension = os.path.splitext(file_name)
-            file_extension = file_extension.lower()  # Normalize extension to lowercase
+            file_extension = file_extension.lower()
 
             # Set default extension and file types based on the original image format
             if file_extension in ['.jpg', '.jpeg']:
@@ -317,7 +345,6 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
             elif file_extension == '.gif':
                 filetypes = [("GIF files", "*.gif"), ("All files", "*.*")]
             else:
-                # Fallback for any other extension
                 filetypes = [(f"{file_extension.upper()} files", f"*{file_extension}"), ("All files", "*.*")]
 
             # Open the save file dialog with the correct default extension
@@ -340,10 +367,12 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
 def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_size=400):
     display_frames = []
 
-    # If gif_image is not passed (None), then we are dealing with the original raw GIF data
-    if gif_image is None:
-        # Use the original GIF data directly for display
-        gif_image = Image.open(io.BytesIO(original_gif_data))
+    # Open the GIF image from the original GIF data
+    gif_image = Image.open(io.BytesIO(original_gif_data))
+
+    # Extract original resolution and file size
+    original_width, original_height = gif_image.size
+    file_size_kb = len(original_gif_data) / 1024  # File size in KB
 
     # Resize the GIF frames only for display purposes
     for frame in ImageSequence.Iterator(gif_image):
@@ -375,7 +404,6 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
         img_label.config(image=frame)
         img_label.image = frame  # Keep a reference to avoid garbage collection
 
-        # Use the duration from the GIF metadata to control frame timing
         delay = gif_image.info.get('duration', 100)
         root.after(delay, update_frame, index + 1, img_label)
 
@@ -390,11 +418,21 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
     img_label = tk.Label(chat_log)
     chat_log.window_create(tk.END, window=img_label)
     chat_log.insert(tk.END, '\n')
+
+    # Add gray text metadata below the GIF
+    metadata_text = f"{file_name} - {file_size_kb:.2f} KB - {original_width}x{original_height} pixels"
+    chat_log.insert(tk.END, metadata_text + "\n", "gray")
+
+    # Define the style for gray-colored text
+    chat_log.tag_configure("gray", foreground="gray")
+
     chat_log.config(state=tk.DISABLED)
     chat_log.yview(tk.END)
 
     # Start the animation
     update_frame(0, img_label)
+
+    auto_scroll_chat_log()
 
     # Save the original GIF data when the image is clicked
     def save_gif(event):
@@ -403,7 +441,7 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
             try:
                 # Write the original GIF data directly to the file
                 with open(file_path, 'wb') as f:
-                    f.write(original_gif_data)  # Save the original unmodified GIF
+                    f.write(original_gif_data)
                 print(f"Original GIF size: {len(original_gif_data)} bytes")
                 print(f"GIF saved as {file_path}")
             except Exception as e:
@@ -429,19 +467,31 @@ def save_image_on_click(event, image_data, file_name):
     except Exception as e:
         print(f"Error saving image: {e}")
 
-
 # Function to save document when clicked
 def save_document_on_click(event, file_data, file_name):
     try:
-        # Extract file extension from file name
+        # Extract file extension from the file name
         _, file_extension = os.path.splitext(file_name)
-        default_extension = file_extension if file_extension else ".pdf"
+        file_extension = file_extension.lower()
         
-        # Open save file dialog with default file name
-        file_path = filedialog.asksaveasfilename(defaultextension=default_extension, filetypes=[("All files", "*.*")], initialfile=file_name)
+        # Set default file type and extension for the save file dialog
+        if not file_extension:  # Default to .pdf if no extension
+            file_extension = ".pdf"
+
+        # Define file types for the save dialog
+        filetypes = [(f"{file_extension[1:].upper()} files", f"*{file_extension}"), ("All files", "*.*")]
+        
+        # Open save file dialog with the appropriate default extension
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=file_extension,
+            filetypes=filetypes,
+            initialfile=file_name
+        )
+        
         if file_path:
-            with open(file_path, 'wb') as file:
-                file.write(file_data)
+            # Save the document data to the selected file path
+            with open(file_path, 'wb') as f:
+                f.write(file_data)
             print(f"Document saved as {file_path}")
     except Exception as e:
         print(f"Error saving document: {e}")
