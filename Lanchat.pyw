@@ -1,3 +1,4 @@
+#V2.3 18/9/24
 import subprocess
 import sys
 
@@ -19,7 +20,7 @@ import tkinter as tk
 from tkinter import filedialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageSequence
 import io
 import threading
 import os
@@ -85,7 +86,7 @@ def send_message(event=None):
 
 # Function to open file dialog and send image
 def send_image():
-    file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.WebP;*.TGA;*.TIFF;*.ico")])
+    file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.gif;*.WebP;*.TGA;*.TIFF;*.ico")])
     if file_path:
         send_image_over_udp(file_path)
 
@@ -109,26 +110,20 @@ def resize_image_if_necessary(image):
         image = image.resize((new_width, new_height), Image.LANCZOS)
     return image
 
-# Function to send image over UDP
+# Function to send image over UDP (with GIF support)
 def send_image_over_udp(image_path):
     try:
-        # Open image and resize if necessary
-        image = Image.open(image_path)
-        image = resize_image_if_necessary(image)
+        # Check if the file is a GIF based on the file extension
+        is_gif = image_path.lower().endswith(".gif")
 
-        # Convert image to byte stream
-        with io.BytesIO() as byte_stream:
-            image.save(byte_stream, format='PNG')
-            byte_data = byte_stream.getvalue()
+        # Open the file and read its raw data as bytes
+        with open(image_path, 'rb') as file:
+            byte_data = file.read()
 
-        # Extract the file name from the path
         file_name = os.path.basename(image_path)
-
-        # Send the file name first
-        header = f'IMG_FILE_NAME_{file_name}'.encode()
+        header = f'GIF_FILE_NAME_{file_name}'.encode() if is_gif else f'IMG_FILE_NAME_{file_name}'.encode()
         sock.sendto(header, (UDP_IP, UDP_PORT))
 
-        # Split byte_data into chunks
         total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
         for i in range(total_chunks):
             start = i * CHUNK_SIZE
@@ -142,7 +137,8 @@ def send_image_over_udp(image_path):
             except Exception as e:
                 print(f"Error sending packet {i}: {e}")
 
-        sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))  # Indicate end of image
+        sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))
+
     except Exception as e:
         print(f"Error sending image: {e}")
 
@@ -194,8 +190,8 @@ def receive():
     received_chunks = {}  # Dictionary to store received chunks
     file_name = None  # Variable to store the file name
     is_image = False
+    is_gif = False
     is_document = False
-    is_placeholder = False
 
     while True:
         try:
@@ -203,133 +199,218 @@ def receive():
             sender_ip = addr[0]
 
             if data.startswith(b'IMG_FILE_NAME_'):
-                # Extract and store the file name
                 file_name = data.decode().split('IMG_FILE_NAME_')[1]
                 is_image = True
+                is_gif = False
                 print(f"Received image file name: {file_name}")
 
-            elif data.startswith(b'DOC_FILE_NAME_'):
-                # Extract and store the file name
-                file_name = data.decode().split('DOC_FILE_NAME_')[1]
-                is_document = True
-                print(f"Received document file name: {file_name}")
+            elif data.startswith(b'GIF_FILE_NAME_'):
+                file_name = data.decode().split('GIF_FILE_NAME_')[1]
+                is_gif = True
+                is_image = False
+                print(f"Received GIF file name: {file_name}")
 
-            elif data.startswith(b'DOC_PLACEHOLDER_'):
-                # Handle the placeholder image for documents
-                file_name = data.decode().split('DOC_PLACEHOLDER_')[1]
-                is_placeholder = True
-                print(f"Received placeholder for document: {file_name}")
-
-            elif data.startswith(b'IMG_CHUNK_'):
-                # Extract header and chunk data
+            elif data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_'):
+                # Handle image or GIF chunks the same way
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
                 received_chunks[index] = chunk
 
-                print(f"Received image chunk {index}/{total}")  # Debugging
+                print(f"Received image/GIF chunk {index}/{total}")
 
                 if len(received_chunks) == total:
-                    # Reassemble image
-                    complete_image_data = b''.join(received_chunks[i] for i in range(total))
+                    # Reassemble the complete image or GIF data
+                    complete_data = b''.join(received_chunks[i] for i in range(total))
                     received_chunks.clear()
 
-                    # Convert byte stream back to image and display
                     try:
-                        print("Reassembling image...")
-                        image = Image.open(io.BytesIO(complete_image_data))
-                        image = resize_image_if_necessary(image)  # Resize if necessary
-                        photo = ImageTk.PhotoImage(image)
-
-                        # Display image in the chat log
-                        chat_log.config(state=tk.NORMAL)
-                        if sender_ip == LOCAL_IP:
-                            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+                        if is_gif:
+                            # Do not process the original GIF; just display it and pass the original data
+                            display_gif(None, sender_ip, file_name, complete_data)  # Passing original GIF data
                         else:
-                            chat_log.insert(tk.END, f"{sender_ip}: \n")
-
-                        # Assign a unique tag for the image
-                        tag_name = f"image_{len(image_references)}"
-                        chat_log.image_create(tk.END, image=photo)
-                        chat_log.insert(tk.END, '\n')
-                        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
-
-                        chat_log.config(state=tk.DISABLED)
-                        chat_log.yview(tk.END)
-
-                        # Keep a reference to avoid garbage collection
-                        image_references.append(photo)
-
-                        # Bind click event to save the specific image with the file name
-                        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_image_data, name=file_name: save_image_on_click(e, data, name))
-
+                            # Process and display static images
+                            image = Image.open(io.BytesIO(complete_data))
+                            display_static_image(image, sender_ip, file_name, complete_data)  # Pass original image data
                     except Exception as e:
-                        print(f"Error displaying image: {e}")
-
-            elif data.startswith(b'DOC_CHUNK_'):
-                # Extract header and chunk data
-                header, chunk = data.split(b'\n', 1)
-                index, total = map(int, header.decode().split('_')[2:])
-                received_chunks[index] = chunk
-
-                print(f"Received document chunk {index}/{total}")  # Debugging
-
-                if len(received_chunks) == total:
-                    # Reassemble document
-                    complete_doc_data = b''.join(received_chunks[i] for i in range(total))
-                    received_chunks.clear()
-
-                    # Display placeholder image
-                    try:
-                        placeholder_image = Image.open(PLACEHOLDER_IMAGE_PATH)
-                        placeholder_image = placeholder_image.resize((133, 200), Image.LANCZOS)
-                        photo = ImageTk.PhotoImage(placeholder_image)
-
-                        # Display placeholder in the chat log
-                        chat_log.config(state=tk.NORMAL)
-                        if sender_ip == LOCAL_IP:
-                            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
-                            chat_log.insert(tk.END, f"{file_name}\n")
-                        else:
-                            chat_log.insert(tk.END, f"{sender_ip}: \n")
-                            chat_log.insert(tk.END, f"{file_name}\n")
-
-                        # Assign a unique tag for the placeholder
-                        tag_name = f"doc_{len(image_references)}"
-                        chat_log.image_create(tk.END, image=photo)
-                        chat_log.insert(tk.END, '\n')
-                        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
-
-                        chat_log.config(state=tk.DISABLED)
-                        chat_log.yview(tk.END)
-
-                        # Keep a reference to avoid garbage collection
-                        image_references.append(photo)
-
-                        # Bind click event to save the specific document with the file name
-                        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
-
-                    except Exception as e:
-                        print(f"Error displaying placeholder: {e}")
+                        print(f"Error displaying image/GIF: {e}")
 
             elif data == b'IMG_END':
-                print("Image transmission ended.")  # Debugging
-
-            elif data == b'DOC_END':
-                print("Document transmission ended.")  # Debugging
-
-            else:
-                # Handle text messages with sender IP
-                message = data.decode()
-                chat_log.config(state=tk.NORMAL)
-                if sender_ip == LOCAL_IP:
-                    chat_log.insert(tk.END, f"{sender_ip} (you): {message}\n")
-                else:
-                    chat_log.insert(tk.END, f"{sender_ip}: {message}\n")
-                chat_log.config(state=tk.DISABLED)
-                chat_log.yview(tk.END)
+                print("Image transmission ended.")
 
         except Exception as e:
             print(f"Error receiving data: {e}")
+
+
+
+def display_document_placeholder(file_name, sender_ip, complete_doc_data):
+    try:
+        # Open and resize the placeholder image
+        placeholder_image = Image.open(PLACEHOLDER_IMAGE_PATH)
+        placeholder_image = placeholder_image.resize((133, 200), Image.LANCZOS)
+        photo = ImageTk.PhotoImage(placeholder_image)
+
+        # Display placeholder in the chat log
+        chat_log.config(state=tk.NORMAL)
+        if sender_ip == LOCAL_IP:
+            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+            chat_log.insert(tk.END, f"{file_name}\n")
+            auto_scroll_chat_log()   
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}: \n")
+            chat_log.insert(tk.END, f"{file_name}\n")
+            auto_scroll_chat_log()   
+
+        # Assign a unique tag for the placeholder
+        tag_name = f"doc_{len(image_references)}"
+        chat_log.image_create(tk.END, image=photo)
+        chat_log.insert(tk.END, '\n')
+        auto_scroll_chat_log()   
+        chat_log.tag_add(tag_name, f"end-2c linestart", f"end-2c lineend")
+
+        chat_log.config(state=tk.DISABLED)
+        chat_log.yview(tk.END)
+
+        # Keep a reference to avoid garbage collection
+        image_references.append(photo)
+
+        # Bind click event to save the specific document with the file name
+        chat_log.tag_bind(tag_name, "<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
+
+    except Exception as e:
+        print(f"Error displaying document placeholder: {e}")
+
+def display_static_image(image, sender_ip, file_name, original_image_data):
+    try:
+        # Resize the image if necessary for display
+        resized_image = resize_image_if_necessary(image)
+
+        # Convert the resized image to a PhotoImage object for display
+        photo = ImageTk.PhotoImage(resized_image)
+
+        # Insert a label into the chat log where the image will be displayed
+        chat_log.config(state=tk.NORMAL)
+        if sender_ip == LOCAL_IP:
+            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}: \n")
+
+        img_label = tk.Label(chat_log, image=photo)
+        chat_log.window_create(tk.END, window=img_label)
+        chat_log.insert(tk.END, '\n')
+        chat_log.config(state=tk.DISABLED)
+        chat_log.yview(tk.END)
+
+        # Keep a reference to avoid garbage collection
+        image_references.append(photo)
+
+        # Add a click event to save the original image when clicked
+        def save_image(event):
+            # Get the file extension (e.g., ".jpg", ".png") from the file_name
+            _, file_extension = os.path.splitext(file_name)
+            file_extension = file_extension.lower()  # Normalize extension to lowercase
+
+            # Set default extension and file types based on the original image format
+            if file_extension in ['.jpg', '.jpeg']:
+                filetypes = [("JPEG files", "*.jpg;*.jpeg"), ("All files", "*.*")]
+            elif file_extension == '.png':
+                filetypes = [("PNG files", "*.png"), ("All files", "*.*")]
+            elif file_extension == '.gif':
+                filetypes = [("GIF files", "*.gif"), ("All files", "*.*")]
+            else:
+                # Fallback for any other extension
+                filetypes = [(f"{file_extension.upper()} files", f"*{file_extension}"), ("All files", "*.*")]
+
+            # Open the save file dialog with the correct default extension
+            file_path = filedialog.asksaveasfilename(defaultextension=file_extension, filetypes=filetypes, initialfile=file_name)
+            if file_path:
+                try:
+                    # Save the original image data to the selected file path
+                    with open(file_path, 'wb') as f:
+                        f.write(original_image_data)
+                    print(f"Image saved as {file_path}")
+                except Exception as e:
+                    print(f"Error saving image: {e}")
+
+        # Bind the click event to the label
+        img_label.bind("<Button-1>", save_image)
+
+    except Exception as e:
+        print(f"Error displaying static image: {e}")
+
+def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_size=400):
+    display_frames = []
+
+    # If gif_image is not passed (None), then we are dealing with the original raw GIF data
+    if gif_image is None:
+        # Use the original GIF data directly for display
+        gif_image = Image.open(io.BytesIO(original_gif_data))
+
+    # Resize the GIF frames only for display purposes
+    for frame in ImageSequence.Iterator(gif_image):
+        frame = frame.copy()
+
+        # Resize each frame to fit within the max display size (e.g., 400x400)
+        width, height = frame.size
+        if width > max_display_size or height > max_display_size:
+            if width > height:
+                new_width = max_display_size
+                new_height = int((max_display_size / width) * height)
+            else:
+                new_height = max_display_size
+                new_width = int((max_display_size / height) * width)
+
+            frame = frame.resize((new_width, new_height), Image.LANCZOS)
+
+        display_frames.append(frame)
+
+    if not display_frames:
+        print("No frames extracted from the GIF.")
+        return
+
+    def update_frame(index, img_label):
+        if index >= len(display_frames):
+            index = 0
+
+        frame = ImageTk.PhotoImage(display_frames[index])
+        img_label.config(image=frame)
+        img_label.image = frame  # Keep a reference to avoid garbage collection
+
+        # Use the duration from the GIF metadata to control frame timing
+        delay = gif_image.info.get('duration', 100)
+        root.after(delay, update_frame, index + 1, img_label)
+
+    # Display the GIF in the chat log
+    chat_log.config(state=tk.NORMAL)
+    if sender_ip == LOCAL_IP:
+        chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+    else:
+        chat_log.insert(tk.END, f"{sender_ip}: \n")
+
+    # Create a label to display the GIF
+    img_label = tk.Label(chat_log)
+    chat_log.window_create(tk.END, window=img_label)
+    chat_log.insert(tk.END, '\n')
+    chat_log.config(state=tk.DISABLED)
+    chat_log.yview(tk.END)
+
+    # Start the animation
+    update_frame(0, img_label)
+
+    # Save the original GIF data when the image is clicked
+    def save_gif(event):
+        file_path = filedialog.asksaveasfilename(defaultextension=".gif", filetypes=[("GIF files", "*.gif"), ("All files", "*.*")], initialfile=file_name)
+        if file_path:
+            try:
+                # Write the original GIF data directly to the file
+                with open(file_path, 'wb') as f:
+                    f.write(original_gif_data)  # Save the original unmodified GIF
+                print(f"Original GIF size: {len(original_gif_data)} bytes")
+                print(f"GIF saved as {file_path}")
+            except Exception as e:
+                print(f"Error saving GIF: {e}")
+
+    # Bind the save function to the click event
+    img_label.bind("<Button-1>", save_gif)
 
 # Function to save image when clicked
 def save_image_on_click(event, image_data, file_name):
@@ -347,6 +428,7 @@ def save_image_on_click(event, image_data, file_name):
             print(f"Image saved as {file_path}")
     except Exception as e:
         print(f"Error saving image: {e}")
+
 
 # Function to save document when clicked
 def save_document_on_click(event, file_data, file_name):
@@ -373,6 +455,10 @@ def on_drop(event):
         else:
             send_document_over_udp(file)
 
+# Ensure the chat log auto-scrolls to the newest message after adding any message
+def auto_scroll_chat_log():
+    chat_log.yview_moveto(1.0)  # Move scrollbar to the bottom
+
 # Setup GUI
 root = TkinterDnD.Tk()  # Use TkinterDnD.Tk() instead of tk.Tk()
 root.title("Python LAN Chat")
@@ -382,7 +468,7 @@ root.iconbitmap(ICON_PATH)
 frame = tk.Frame(root)
 frame.pack(padx=10, pady=10)
 
-chat_log = tk.Text(frame, height=20, width=65, state=tk.DISABLED)
+chat_log = tk.Text(frame, height=30, width=90, state=tk.DISABLED)
 chat_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 scrollbar = tk.Scrollbar(frame, command=chat_log.yview)
