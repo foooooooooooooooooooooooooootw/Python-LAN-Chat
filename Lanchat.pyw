@@ -1,4 +1,6 @@
-#V2.4 18/9/24
+#V2.5 21/9/24
+#Added dynamic broadcast address detection
+#More robust file extension detection for drag and drop
 #TODO add settings? settings should include colours of windows, text, etc. Maybe even settings on where the files are saved. 
 #TODO add video player?
 
@@ -29,9 +31,121 @@ import threading
 import os
 import requests
 import time
+import struct
 
-# Configuration
-UDP_IP = '192.168.1.255'  # Broadcast address, adjust as needed
+# Function to calculate broadcast address based on IP and subnet mask
+def get_broadcast_address(ip, subnet_mask):
+    ip_bin = struct.unpack('>I', socket.inet_aton(ip))[0]
+    mask_bin = struct.unpack('>I', socket.inet_aton(subnet_mask))[0]
+    broadcast_bin = ip_bin | ~mask_bin
+    broadcast_ip = socket.inet_ntoa(struct.pack('>I', broadcast_bin & 0xFFFFFFFF))
+    return broadcast_ip
+
+# Function to get the subnet mask on Windows using ipconfig
+def get_subnet_mask_windows(interface_name):
+    try:
+        output = subprocess.check_output("ipconfig").decode('utf-8')
+        for line in output.splitlines():
+            if interface_name in line:
+                for next_line in output.splitlines():
+                    if "Subnet Mask" in next_line:
+                        return next_line.split(":")[-1].strip()
+    except Exception as e:
+        print(f"Error retrieving subnet mask on Windows: {e}")
+    return None
+
+# Function to get the subnet mask on Linux/macOS using fcntl
+def get_subnet_mask_unix(ifname):
+    import fcntl
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        return socket.inet_ntoa(fcntl.ioctl(
+            sock.fileno(),
+            0x891b,  # SIOCGIFNETMASK for Linux/macOS
+            struct.pack('256s', ifname[:15].encode('utf-8'))
+        )[20:24])
+    except Exception as e:
+        print(f"Error getting subnet mask on Unix: {e}")
+        return None
+
+# Function to get local IP address (different methods for Windows and Unix)
+def get_local_ip(ifname):
+    if os.name == 'nt':  # Windows
+        try:
+            output = subprocess.check_output("ipconfig").decode('utf-8')
+            for line in output.splitlines():
+                if ifname in line:
+                    for next_line in output.splitlines():
+                        if "IPv4 Address" in next_line:
+                            return next_line.split(":")[-1].strip()
+        except Exception as e:
+            print(f"Error retrieving local IP on Windows: {e}")
+    else:  # Unix-like systems
+        try:
+            import fcntl
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            return socket.inet_ntoa(fcntl.ioctl(
+                sock.fileno(),
+                0x8915,  # SIOCGIFADDR for Linux/macOS
+                struct.pack('256s', ifname[:15].encode('utf-8'))
+            )[20:24])
+        except Exception as e:
+            print(f"Error retrieving local IP on Unix: {e}")
+    return None
+
+# Function to detect the active interface (Windows or Unix)
+def get_active_interface():
+    try:
+        if os.name == 'posix':  # Unix-like systems
+            if sys.platform == 'linux' or sys.platform == 'darwin':  # Linux or macOS
+                if os.path.exists('/sys/class/net/eth0'):
+                    return 'eth0'
+                elif os.path.exists('/sys/class/net/wlan0'):
+                    return 'wlan0'
+                else:
+                    raise Exception("No active ethernet or wifi interfaces found.")
+        elif os.name == 'nt':  # Windows
+            interfaces = subprocess.check_output("ipconfig").decode('utf-8')
+            if 'Ethernet adapter' in interfaces:
+                return 'Ethernet'
+            elif 'Wireless LAN adapter' in interfaces:
+                return 'Wi-Fi'
+            else:
+                raise Exception("No active ethernet or wifi interfaces found.")
+    except Exception as e:
+        print(f"Error detecting active interface: {e}")
+        return None
+
+# Main logic to detect broadcast address
+def detect_broadcast_address():
+    active_interface = get_active_interface()
+    if not active_interface:
+        return None
+
+    local_ip = get_local_ip(active_interface)
+    if not local_ip:
+        return None
+
+    if os.name == 'nt':  # Windows
+        subnet_mask = get_subnet_mask_windows(active_interface)
+    else:  # Unix-like systems
+        subnet_mask = get_subnet_mask_unix(active_interface)
+
+    if not subnet_mask:
+        return None
+
+    broadcast_address = get_broadcast_address(local_ip, subnet_mask)
+    return broadcast_address
+
+# Example usage:
+broadcast_address = detect_broadcast_address()
+if broadcast_address:
+    print(f"Detected broadcast address: {broadcast_address}")
+else:
+    print("Failed to detect broadcast address.")
+
+# Use this dynamically detected broadcast address in your configuration
+UDP_IP = broadcast_address if broadcast_address else '192.168.1.255'  # Fallback to hardcoded value if detection fails
 UDP_PORT = 12345
 CHUNK_SIZE = 64000  # Safe size for chunks
 
@@ -450,6 +564,15 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
     # Bind the save function to the click event
     img_label.bind("<Button-1>", save_gif)
 
+# Function to check if a file is a supported image type by Pillow
+def is_supported_image(file_path):
+    try:
+        with Image.open(file_path) as img:
+            img.verify()  # Verify if it's a valid image file
+        return True
+    except Exception:
+        return False
+
 # Function to save image when clicked
 def save_image_on_click(event, image_data, file_name):
     try:
@@ -500,10 +623,10 @@ def save_document_on_click(event, file_data, file_name):
 def on_drop(event):
     files = root.tk.splitlist(event.data)
     for file in files:
-        if file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.tga', '.tiff', '.ico')):
-            send_image_over_udp(file)
+        if is_supported_image(file):  # Check if the file is a supported image
+            send_image_over_udp(file)  # Call image sending function
         else:
-            send_document_over_udp(file)
+            send_document_over_udp(file)  # Call document sending function
 
 # Ensure the chat log auto-scrolls to the newest message after adding any message
 def auto_scroll_chat_log():
