@@ -24,7 +24,14 @@ Point to note: this presumes your network is secure and no one is listening in o
 
 # FAQ
 ### Why?
-After trying to send text or images to another computer on the same network many times, I realized it was a huge pain and we should not have to rely on messaging services like whatsapp or telegram just to send things around. What if internet connection wasn't available?
+After trying to send text or images to another computer on the same network many times, I realized it was a huge pain and we should not have to rely on messaging services like whatsapp or telegram just to send things around, or even go digging around for a thumbdrive.
+Top reasons:
+<ul>
+  <li> What if internet wasn't available?</li>
+  <li> What if you wanted to send it to multiple computers?</li>
+  <li> What if it was a big file and there was a file limit like most online services have?</li>
+  <li> Thumbdrives are also a great alternative except it gets real tiring to look for one, plug it in and out of computers etc. and not to mention the transfer speed of USB and the potential file size limit there too (e.g. FAT32 only allows 4GB)</li>
+</ul>
 
 ### Why not leverage TCP or use another programming language?
 TCP would need a server or even having to know your other device's IP in the case of a client-server architecture. Even then, you would be sending messages to only one other device at a time. This way is much easier and requires 0 set-up. 
