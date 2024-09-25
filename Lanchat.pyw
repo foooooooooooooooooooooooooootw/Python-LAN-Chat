@@ -1,6 +1,5 @@
-#V2.5 21/9/24
-#Added dynamic broadcast address detection
-#More robust file extension detection for drag and drop
+#V2.6 25/9/24
+#Added copying. Now ctrl-c works for text in the chatlog, and theres a context menu if you want to copy it with your mouse.
 #TODO add settings? settings should include colours of windows, text, etc. Maybe even settings on where the files are saved. 
 #TODO add video player?
 
@@ -632,6 +631,19 @@ def on_drop(event):
 def auto_scroll_chat_log():
     chat_log.yview_moveto(1.0)  # Move scrollbar to the bottom
 
+def copy_to_clipboard(event=None):
+    # Copy the selected text to the clipboard
+    chat_log.clipboard_clear()
+    try:
+        chat_log.clipboard_append(chat_log.get("sel.first", "sel.last"))
+        chat_log.update()  # Update clipboard to ensure it's available
+    except tk.TclError:
+        pass  # Handle the case where no text is selected
+
+def show_context_menu(event):
+    # Display the context menu at the mouse pointer position
+    context_menu.post(event.x_root, event.y_root)
+
 # Setup GUI
 root = TkinterDnD.Tk()  # Use TkinterDnD.Tk() instead of tk.Tk()
 root.title("Python LAN Chat")
@@ -647,6 +659,19 @@ chat_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 scrollbar = tk.Scrollbar(frame, command=chat_log.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 chat_log.config(yscrollcommand=scrollbar.set)
+
+# Create the context menu
+context_menu = tk.Menu(frame, tearoff=0)
+context_menu.add_command(label="Copy", command=copy_to_clipboard)
+
+# Bind right-click event to show the context menu
+chat_log.bind("<Button-3>", show_context_menu)
+
+# Allow copying with Ctrl+C
+chat_log.bind("<Control-c>", copy_to_clipboard)
+
+# Optionally, you can also bind Ctrl+Insert for copying
+chat_log.bind("<Control-Insert>", copy_to_clipboard)
 
 input_frame = tk.Frame(root)
 input_frame.pack(pady=5, padx=10, fill=tk.X)
