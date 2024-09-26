@@ -1,6 +1,8 @@
-#V2.6 25/9/24
-#Added copying. Now ctrl-c works for text in the chatlog, and theres a context menu if you want to copy it with your mouse.
-#TODO add settings? settings should include colours of windows, text, etc. Maybe even settings on where the files are saved. 
+#V2.7 27/9/24
+#Added settings menu. New settings allow for changing font/bg colours, changing broadcast address and even ports ("channels"). 
+#Changed the way messages are received - now they are added to a queue to prevent blocking the main thread.
+#BUGFIX for messages not sending after receiving an image or a document.
+#TODO add settings? Maybe even settings on where the files are saved. 
 #TODO add video player?
 
 import subprocess
@@ -21,7 +23,7 @@ def install_dependencies():
 install_dependencies()
 
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, colorchooser, simpledialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
 from PIL import Image, ImageTk, ImageSequence
@@ -31,6 +33,10 @@ import os
 import requests
 import time
 import struct
+import queue
+
+# Create a queue for safely passing data between threads
+message_queue = queue.Queue()
 
 # Function to calculate broadcast address based on IP and subnet mask
 def get_broadcast_address(ip, subnet_mask):
@@ -142,6 +148,105 @@ if broadcast_address:
     print(f"Detected broadcast address: {broadcast_address}")
 else:
     print("Failed to detect broadcast address.")
+
+sent_message_color = "#CE123E"  # Default color for sent messages
+received_message_color = "#167F8D"  # Default color for received messages
+
+# Function to open the settings window
+def open_settings():
+    global sent_message_color, received_message_color
+
+    # Create a new top-level window for settings
+    settings_window = tk.Toplevel(root)
+    settings_window.title("Settings")
+    settings_window.geometry("300x300")  # Set window size for better layout
+
+    # Background color option
+    def change_bg_color():
+        color = colorchooser.askcolor()[1]
+        if color:
+            chat_log.config(bg=color)
+
+        # Font color option for sent messages
+    def change_sent_message_color():
+        global sent_message_color
+        color = colorchooser.askcolor()[1]
+        if color:
+            sent_message_color = color
+
+    # Font color option for received messages
+    def change_received_message_color():
+        global received_message_color
+        color = colorchooser.askcolor()[1]
+        if color:
+            received_message_color = color
+
+    # Function to safely switch to a new port by re-binding the socket
+    def switch_port(preset_port):
+        global UDP_PORT, sock
+        try:
+            UDP_PORT = preset_port
+            sock.close()  # Close the existing socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a new socket
+            sock.bind(('', UDP_PORT))  # Rebind to the new port
+            tk.messagebox.showinfo("Port Changed", f"Port changed to {UDP_PORT}")
+        except Exception as e:
+            tk.messagebox.showerror("Port Error", f"Failed to bind to port {UDP_PORT}. Error: {e}")
+
+    # Function to enter a custom port
+    def change_custom_port():
+        global UDP_PORT, sock
+        try:
+            new_port = simpledialog.askinteger("Port Settings", "Enter custom Send Port:", initialvalue=UDP_PORT)
+            if new_port:
+                UDP_PORT = new_port
+                sock.close()  # Close the existing socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a new socket
+                sock.bind(('', UDP_PORT))  # Rebind to the new port
+                tk.messagebox.showinfo("Port Changed", f"Custom port changed to {UDP_PORT}")
+        except Exception as e:
+            tk.messagebox.showerror("Port Error", f"Failed to bind to custom port {UDP_PORT}. Error: {e}")
+
+    def change_custom_channel():
+        global UDP_IP
+        new_ip = simpledialog.askstring("Address Settings", "Enter new broadcast address (e.g., 192.168.1.255):", initialvalue=UDP_IP)
+        if new_ip:
+            UDP_IP = new_ip
+
+    # Beautified layout with sections
+    settings_frame = tk.Frame(settings_window)
+    settings_frame.pack(pady=10)
+
+    # Background and font color options
+    bg_color_button = tk.Button(settings_frame, text="Change Background Color", command=change_bg_color)
+    bg_color_button.pack(pady=5)
+
+    # Add options for changing sent and received message colors
+    sent_message_color_button = tk.Button(settings_frame, text="Change Sent Message Color", command=change_sent_message_color)
+    sent_message_color_button.pack(pady=5)
+
+    received_message_color_button = tk.Button(settings_frame, text="Change Received Message Color", command=change_received_message_color)
+    received_message_color_button.pack(pady=5)
+
+    # Port selection section
+    port_frame = tk.LabelFrame(settings_window, text="Select Port", padx=10, pady=10)
+    port_frame.pack(pady=10, padx=10, fill="both")
+
+    row_1 = tk.Frame(port_frame)
+    row_1.pack()
+    tk.Button(row_1, text="12345", width=8, command=lambda: switch_port(12345)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(row_1, text="22222", width=8, command=lambda: switch_port(22222)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(row_1, text="33333", width=8, command=lambda: switch_port(33333)).pack(side=tk.LEFT, padx=5, pady=5)
+
+    row_2 = tk.Frame(port_frame)
+    row_2.pack() 
+    tk.Button(row_2, text="44444", width=12, command=lambda: switch_port(44444)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(row_2, text="Custom Channel", width=15, command=change_custom_port).pack(side=tk.LEFT, padx=5, pady=5)
+
+    # Custom channel button
+    channel_button = tk.Button(settings_frame, text="Change Broadcast Address", command=change_custom_channel)
+    channel_button.pack(pady=5)
+
 
 # Use this dynamically detected broadcast address in your configuration
 UDP_IP = broadcast_address if broadcast_address else '192.168.1.255'  # Fallback to hardcoded value if detection fails
@@ -291,28 +396,48 @@ def send_document_over_udp(file_path):
     except Exception as e:
         print(f"Error sending document: {e}")
 
+# Global variables to hold the state of file transfers
+received_chunks = {}
+file_name = None
+is_image = False
+is_gif = False
+is_document = False
+
+# Function to handle received messages, safely adding them to the queue
 def receive():
-    received_chunks = {}
-    file_name = None
-    is_image = False
-    is_gif = False
-    is_document = False
+    global received_chunks, file_name, is_image, is_gif, is_document
 
     while True:
         try:
-            data, addr = sock.recvfrom(65535)
+            data, addr = sock.recvfrom(65535)  # Receiving data from socket
             sender_ip = addr[0]
+
+            # Add the received data to the queue for processing in the main thread
+            message_queue.put((sender_ip, data))
+
+        except Exception as e:
+            print(f"Error receiving data: {e}")
+
+# Function to process messages from the queue in the main thread
+def process_queue():
+    global received_chunks, file_name, is_image, is_gif, is_document
+
+    try:
+        while not message_queue.empty():
+            sender_ip, data = message_queue.get()
 
             if data.startswith(b'IMG_FILE_NAME_'):
                 file_name = data.decode().split('IMG_FILE_NAME_')[1]
                 is_image = True
                 is_gif = False
+                is_document = False
                 print(f"Received image file name: {file_name}")
 
             elif data.startswith(b'GIF_FILE_NAME_'):
                 file_name = data.decode().split('GIF_FILE_NAME_')[1]
                 is_gif = True
                 is_image = False
+                is_document = False
                 print(f"Received GIF file name: {file_name}")
 
             elif data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_'):
@@ -324,10 +449,12 @@ def receive():
                 if len(received_chunks) == total:
                     complete_data = b''.join(received_chunks[i] for i in range(total))
                     received_chunks.clear()
+                    is_image = False
 
                     try:
                         if is_gif:
                             display_gif(None, sender_ip, file_name, complete_data)
+                            is_gif = False
                         else:
                             image = Image.open(io.BytesIO(complete_data))
                             display_static_image(image, sender_ip, file_name, complete_data)
@@ -337,6 +464,8 @@ def receive():
             elif data.startswith(b'DOC_FILE_NAME_'):
                 file_name = data.decode().split('DOC_FILE_NAME_')[1]
                 is_document = True
+                is_image = False
+                is_gif = False
                 print(f"Received document file name: {file_name}")
 
             elif data.startswith(b'DOC_CHUNK_'):
@@ -350,6 +479,7 @@ def receive():
 
                     # Display a placeholder and metadata for the document
                     display_document_placeholder(file_name, sender_ip, complete_data)
+                    is_document = False
 
             elif data == b'IMG_END':
                 print("Image transmission ended.")
@@ -357,18 +487,26 @@ def receive():
             elif not is_image and not is_gif and not is_document:
                 # Handle as text message
                 message = data.decode()
-                chat_log.config(state=tk.NORMAL)
-                if sender_ip == LOCAL_IP:
-                    chat_log.insert(tk.END, f"{sender_ip} (you): {message} \n")
-                else:
-                    chat_log.insert(tk.END, f"{sender_ip}: {message} \n")
-                chat_log.config(state=tk.DISABLED)
-                chat_log.yview(tk.END)
+                display_message(sender_ip, message)
                 print(f"Received message: {message}")
 
-        except Exception as e:
-            print(f"Error receiving data: {e}")
+        # Schedule the next call to process_queue
+        root.after(100, process_queue)
 
+    except Exception as e:
+        print(f"Error processing queue: {e}")
+
+# Function to display text messages with proper tagging
+def display_message(sender_ip, message):
+    chat_log.config(state=tk.NORMAL)  # Enable editing
+    if sender_ip == LOCAL_IP:
+        chat_log.insert(tk.END, f"{sender_ip} (you): {message}\n", ("sent_message",))
+    else:
+        chat_log.insert(tk.END, f"{sender_ip}: {message}\n", ("received_message",))
+    chat_log.config(state=tk.DISABLED)  # Disable editing after inserting
+    chat_log.yview(tk.END)  # Scroll to the end
+
+# Function to display document placeholder
 def display_document_placeholder(file_name, sender_ip, complete_doc_data):
     try:
         # Load and resize the placeholder image
@@ -380,9 +518,9 @@ def display_document_placeholder(file_name, sender_ip, complete_doc_data):
         # Display the placeholder image in the chat log
         chat_log.config(state=tk.NORMAL)
         if sender_ip == LOCAL_IP:
-            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+            chat_log.insert(tk.END, f"{sender_ip} (you):\n", "sent_message")
         else:
-            chat_log.insert(tk.END, f"{sender_ip}: \n")
+            chat_log.insert(tk.END, f"{sender_ip}: \n", "received_message")
 
         # Add a Label for the placeholder image
         img_label = tk.Label(chat_log, image=photo, bg=chat_log.cget('bg'), bd=0, highlightthickness=0)
@@ -395,14 +533,14 @@ def display_document_placeholder(file_name, sender_ip, complete_doc_data):
         chat_log.insert(tk.END, metadata_text + "\n", "gray")
         chat_log.tag_configure("gray", foreground="gray")
 
-        chat_log.config(state=tk.DISABLED)
+        # Scroll and disable chat log
         chat_log.yview(tk.END)
-        auto_scroll_chat_log()
+        chat_log.config(state=tk.DISABLED)
 
         # Keep a reference to avoid garbage collection
         image_references.append(photo)
 
-        # Bind the click event to the image label
+        # Bind the click event to the image label to save the document
         img_label.bind("<Button-1>", lambda e, data=complete_doc_data, name=file_name: save_document_on_click(e, data, name))
 
     except Exception as e:
@@ -423,9 +561,9 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         # Insert a label into the chat log where the image will be displayed
         chat_log.config(state=tk.NORMAL)
         if sender_ip == LOCAL_IP:
-            chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+            chat_log.insert(tk.END, f"{sender_ip} (you): \n", ("sent_message",))
         else:
-            chat_log.insert(tk.END, f"{sender_ip}: \n")
+            chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
 
         img_label = tk.Label(chat_log, image=photo)
         chat_log.window_create(tk.END, window=img_label)
@@ -523,9 +661,9 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
     # Display the GIF in the chat log
     chat_log.config(state=tk.NORMAL)
     if sender_ip == LOCAL_IP:
-        chat_log.insert(tk.END, f"{sender_ip} (you):\n")
+        chat_log.insert(tk.END, f"{sender_ip} (you): \n", ("sent_message",))
     else:
-        chat_log.insert(tk.END, f"{sender_ip}: \n")
+        chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
 
     # Create a label to display the GIF
     img_label = tk.Label(chat_log)
@@ -676,9 +814,15 @@ chat_log.bind("<Control-Insert>", copy_to_clipboard)
 input_frame = tk.Frame(root)
 input_frame.pack(pady=5, padx=10, fill=tk.X)
 
-entry = tk.Entry(input_frame, width=50)
+# Add settings button to the left inside the input frame
+settings_button = tk.Button(input_frame, text="⚙️", command=open_settings)
+settings_button.pack(side=tk.LEFT, padx=5)
+
+# Shrink the entry box to allow space for the settings button
+entry = tk.Entry(input_frame, width=40)  # Reduced width
 entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+# Send button and other options remain unchanged
 send_button = tk.Button(input_frame, text=">>>", command=send_message)
 send_button.pack(side=tk.LEFT, padx=5)
 
@@ -694,6 +838,9 @@ root.bind('<Return>', send_message)
 chat_log.drop_target_register(DND_FILES)
 chat_log.dnd_bind('<<Drop>>', on_drop)
 
+chat_log.tag_configure("sent_message", foreground=sent_message_color)
+chat_log.tag_configure("received_message", foreground=received_message_color)
+
 # Setup UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('', UDP_PORT))
@@ -701,6 +848,9 @@ sock.bind(('', UDP_PORT))
 # Increase socket buffer size
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65535)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65535)
+
+# Start the queue processing function
+root.after(100, process_queue)
 
 # Start receiving thread
 recv_thread = threading.Thread(target=receive, daemon=True)
