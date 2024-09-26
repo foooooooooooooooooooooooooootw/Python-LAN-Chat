@@ -17,6 +17,8 @@ This was tested on my home network with wired connections & no packet loss, so d
 
 Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption. Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
 
+The .pyw file will typically be the most updated since I don't compile a binary for every new version.
+
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/staticdemo.jpg">
