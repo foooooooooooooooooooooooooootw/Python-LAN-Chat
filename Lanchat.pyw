@@ -1,8 +1,6 @@
-#V2.7 27/9/24
-#Added settings menu. New settings allow for changing font/bg colours, changing broadcast address and even ports ("channels"). 
-#Changed the way messages are received - now they are added to a queue to prevent blocking the main thread.
-#BUGFIX for messages not sending after receiving an image or a document.
-#TODO add settings? Maybe even settings on where the files are saved. 
+#V2.8 27/9/24
+#Fixed the default icon for the settings window and rearranged the buttons so they fit nicely into groups
+#TODO increase amount of settings provided?
 #TODO add video player?
 
 import subprocess
@@ -26,7 +24,7 @@ import tkinter as tk
 from tkinter import filedialog, colorchooser, simpledialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
-from PIL import Image, ImageTk, ImageSequence
+from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFont, ImageChops
 import io
 import threading
 import os
@@ -37,6 +35,65 @@ import queue
 
 # Create a queue for safely passing data between threads
 message_queue = queue.Queue()
+
+def create_gear_icon():
+    """Create the gear icon (⚙️) dynamically if it doesn't already exist."""
+    if not os.path.exists(GEAR_ICON_PATH):
+        print("Creating the gear icon for the first time...")
+        
+        # Define the size of the icon (64x64 is standard for icons)
+        size = (256,256)
+        
+        # Create a new image with a transparent background
+        img = Image.new('RGBA', size, (255, 255, 255, 0))
+        mask = Image.new('L', size, 0)
+
+        # Create a drawing context
+        draw = ImageDraw.Draw(img)
+        mask_draw = ImageDraw.Draw(mask)
+
+        # Load a system font that supports emoji rendering (update the font path as needed)
+        font_path = "seguiemj.ttf"  # Path to a font that supports emojis. Modify this based on your OS.
+        font_size = 192  # Adjust font size to fit inside the icon
+        font = ImageFont.truetype(font_path, font_size)
+
+        # Measure the size of the gear emoji
+        text = "⚙️"
+        # Get the bounding box of the text (x0, y0, x1, y1)
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+
+        # Calculate the width and height of the text based on the bounding box
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+
+        # Calculate the position to center the gear emoji within the image
+        position_x = (size[0] - text_width) // 2
+        position_y = (size[1] - text_height) // 2 + 28
+
+        # Ensure the emoji stays within the bounds (avoid going off-canvas)
+        position_x = max(0, position_x)
+        position_y = max(0, position_y)
+
+        # Draw the gear emoji centered in the image
+        draw.text((position_x, position_y), text, font=font, fill=(0, 0, 0, 255))  # Black color for the emoji
+
+        outline_color = (0, 0, 0, 255)  # Black outline
+        for offset in [-2, 0, 2]:  # Adjust outline thickness here
+            draw.text((position_x + offset, position_y + offset), text, font=font, fill=outline_color)
+
+        # Create the mask for the gray fill
+        mask_draw.text((position_x, position_y), text, font=font, fill=255)  # White on mask
+
+        # Fill the inside of the gear with gray
+        fill_color = (169, 169, 169, 255)  # Gray color
+        filled_img = Image.new('RGBA', size, fill_color)
+        img_with_fill = ImageChops.composite(filled_img, img, mask)  # Apply the mask to fill the inside
+
+        # Save the image as an .ico file
+        img_with_fill.save(GEAR_ICON_PATH, format='ICO')
+        print(f"Gear icon created at {GEAR_ICON_PATH}")
+    else:
+        print(f"Gear icon already exists at {GEAR_ICON_PATH}")
 
 # Function to calculate broadcast address based on IP and subnet mask
 def get_broadcast_address(ip, subnet_mask):
@@ -159,7 +216,10 @@ def open_settings():
     # Create a new top-level window for settings
     settings_window = tk.Toplevel(root)
     settings_window.title("Settings")
-    settings_window.geometry("300x300")  # Set window size for better layout
+    settings_window.geometry("300x350")  # Set window size for better layout
+
+    # Set the icon for the settings window
+    settings_window.iconbitmap(GEAR_ICON_PATH) 
 
     # Background color option
     def change_bg_color():
@@ -214,37 +274,40 @@ def open_settings():
             UDP_IP = new_ip
 
     # Beautified layout with sections
-    settings_frame = tk.Frame(settings_window)
+    settings_frame = tk.LabelFrame(settings_window, text="Colour Settings", padx=10, pady=10)
     settings_frame.pack(pady=10)
 
-    # Background and font color options
-    bg_color_button = tk.Button(settings_frame, text="Change Background Color", command=change_bg_color)
-    bg_color_button.pack(pady=5)
+    cs_row_1 = tk.Frame(settings_frame)
+    cs_row_1.pack()
+    tk.Button(cs_row_1, text="Background Colour", width=24, command=change_bg_color).pack(side=tk.TOP, padx=5, pady=5)
 
-    # Add options for changing sent and received message colors
-    sent_message_color_button = tk.Button(settings_frame, text="Change Sent Message Color", command=change_sent_message_color)
-    sent_message_color_button.pack(pady=5)
+    cs_row_2 = tk.Frame(settings_frame)
+    cs_row_2.pack()
+    tk.Button(cs_row_2, text="Sent Message Colour", width=24, command=change_sent_message_color).pack(side=tk.TOP, padx=5, pady=5)
 
-    received_message_color_button = tk.Button(settings_frame, text="Change Received Message Color", command=change_received_message_color)
-    received_message_color_button.pack(pady=5)
+    cs_row_3 = tk.Frame(settings_frame)
+    cs_row_3.pack()
+    tk.Button(cs_row_3, text="Received Message Colour", width=24, command=change_received_message_color).pack(side=tk.TOP, padx=5, pady=5)
 
     # Port selection section
     port_frame = tk.LabelFrame(settings_window, text="Select Port", padx=10, pady=10)
     port_frame.pack(pady=10, padx=10, fill="both")
 
-    row_1 = tk.Frame(port_frame)
-    row_1.pack()
-    tk.Button(row_1, text="12345", width=8, command=lambda: switch_port(12345)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(row_1, text="22222", width=8, command=lambda: switch_port(22222)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(row_1, text="33333", width=8, command=lambda: switch_port(33333)).pack(side=tk.LEFT, padx=5, pady=5)
+    pf_row_1 = tk.Frame(port_frame)
+    pf_row_1.pack()
+    tk.Button(pf_row_1, text="12345", width=8, command=lambda: switch_port(12345)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(pf_row_1, text="22222", width=8, command=lambda: switch_port(22222)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(pf_row_1, text="33333", width=8, command=lambda: switch_port(33333)).pack(side=tk.LEFT, padx=5, pady=5)
 
-    row_2 = tk.Frame(port_frame)
-    row_2.pack() 
-    tk.Button(row_2, text="44444", width=12, command=lambda: switch_port(44444)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(row_2, text="Custom Channel", width=15, command=change_custom_port).pack(side=tk.LEFT, padx=5, pady=5)
+    pf_row_2 = tk.Frame(port_frame)
+    pf_row_2.pack() 
+    tk.Button(pf_row_2, text="44444", width=12, command=lambda: switch_port(44444)).pack(side=tk.LEFT, padx=5, pady=5)
+    tk.Button(pf_row_2, text="Custom Channel", width=15, command=change_custom_port).pack(side=tk.LEFT, padx=5, pady=5)
+
+    
 
     # Custom channel button
-    channel_button = tk.Button(settings_frame, text="Change Broadcast Address", command=change_custom_channel)
+    channel_button = tk.Button(settings_window, text="Change Broadcast Address", command=change_custom_channel)
     channel_button.pack(pady=5)
 
 
@@ -270,6 +333,8 @@ os.makedirs(APP_DATA_PATH, exist_ok=True)
 
 PLACEHOLDER_IMAGE_PATH = os.path.join(APP_DATA_PATH, 'doc.png')
 ICON_PATH = os.path.join(APP_DATA_PATH, 'pythonlanchat.ico')
+GEAR_ICON_PATH = os.path.join(APP_DATA_PATH, 'gear.ico')
+create_gear_icon()
 
 # Download the placeholder image if not already downloaded
 def download_placeholder_image():
@@ -392,9 +457,11 @@ def send_document_over_udp(file_path):
             except Exception as e:
                 print(f"Error sending packet {i}: {e}")
 
-        sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))  # Indicate end of document
+        sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))
     except Exception as e:
         print(f"Error sending document: {e}")
+
+CHUNK_TIMEOUT = 2
 
 # Global variables to hold the state of file transfers
 received_chunks = {}
@@ -402,6 +469,7 @@ file_name = None
 is_image = False
 is_gif = False
 is_document = False
+last_received_time = None 
 
 # Function to handle received messages, safely adding them to the queue
 def receive():
@@ -418,9 +486,19 @@ def receive():
         except Exception as e:
             print(f"Error receiving data: {e}")
 
+def reset_transfer_flags():
+    """Helper function to reset the state flags."""
+    global is_image, is_gif, is_document, received_chunks, file_name, last_received_time
+    is_image = False
+    is_gif = False
+    is_document = False
+    received_chunks.clear()
+    file_name = None
+    last_received_time = None
+
 # Function to process messages from the queue in the main thread
 def process_queue():
-    global received_chunks, file_name, is_image, is_gif, is_document
+    global received_chunks, file_name, is_image, is_gif, is_document, last_received_time
 
     try:
         while not message_queue.empty():
@@ -431,6 +509,7 @@ def process_queue():
                 is_image = True
                 is_gif = False
                 is_document = False
+                last_received_time = time.time()
                 print(f"Received image file name: {file_name}")
 
             elif data.startswith(b'GIF_FILE_NAME_'):
@@ -438,57 +517,78 @@ def process_queue():
                 is_gif = True
                 is_image = False
                 is_document = False
+                last_received_time = time.time()
                 print(f"Received GIF file name: {file_name}")
 
             elif data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_'):
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
                 received_chunks[index] = chunk
+                last_received_time = time.time()
                 print(f"Received image/GIF chunk {index}/{total}")
 
                 if len(received_chunks) == total:
                     complete_data = b''.join(received_chunks[i] for i in range(total))
                     received_chunks.clear()
-                    is_image = False
 
                     try:
                         if is_gif:
                             display_gif(None, sender_ip, file_name, complete_data)
-                            is_gif = False
                         else:
                             image = Image.open(io.BytesIO(complete_data))
                             display_static_image(image, sender_ip, file_name, complete_data)
                     except Exception as e:
                         print(f"Error displaying image/GIF: {e}")
 
+                    finally:
+                        # Always reset the state flags after processing
+                        reset_transfer_flags()
+
             elif data.startswith(b'DOC_FILE_NAME_'):
                 file_name = data.decode().split('DOC_FILE_NAME_')[1]
                 is_document = True
                 is_image = False
                 is_gif = False
+                last_received_time = time.time()
                 print(f"Received document file name: {file_name}")
 
             elif data.startswith(b'DOC_CHUNK_'):
                 header, chunk = data.split(b'\n', 1)
                 index, total = map(int, header.decode().split('_')[2:])
                 received_chunks[index] = chunk
+                last_received_time = time.time()
 
                 if len(received_chunks) == total:
-                    complete_data = b''.join(received_chunks[i] for i in range(total))
-                    received_chunks.clear()
+                    try:
+                        complete_data = b''.join(received_chunks[i] for i in range(total))
+                        received_chunks.clear()
 
-                    # Display a placeholder and metadata for the document
-                    display_document_placeholder(file_name, sender_ip, complete_data)
-                    is_document = False
+                        # Display a placeholder and metadata for the document
+                        display_document_placeholder(file_name, sender_ip, complete_data)
+                    except Exception as e:
+                        print(f"Error displaying document: {e}")
+                    finally:
+                        # Always reset the state flags after processing
+                        reset_transfer_flags()
+            
+            elif data == b'DOC_END':
+                print("Document transmission ended.")
+                reset_transfer_flags() 
+                continue
 
             elif data == b'IMG_END':
                 print("Image transmission ended.")
+                reset_transfer_flags()
 
             elif not is_image and not is_gif and not is_document:
                 # Handle as text message
                 message = data.decode()
                 display_message(sender_ip, message)
                 print(f"Received message: {message}")
+        
+        if last_received_time and time.time() - last_received_time > CHUNK_TIMEOUT:
+            print(f"Timeout reached: discarding incomplete transfer for {file_name}")
+            reset_transfer_flags()
 
         # Schedule the next call to process_queue
         root.after(100, process_queue)
