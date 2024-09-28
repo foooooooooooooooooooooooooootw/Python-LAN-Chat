@@ -1,6 +1,6 @@
-#V2.8 27/9/24
-#Fixed the default icon for the settings window and rearranged the buttons so they fit nicely into groups
-#TODO increase amount of settings provided?
+#V2.9 28/9/24
+#Fix for settings button being able to open multiple settings windows
+#TODO Progress bar of some sort for file uploads, threading so the GUI doesn't get blocked
 #TODO add video player?
 
 import subprocess
@@ -35,6 +35,7 @@ import queue
 
 # Create a queue for safely passing data between threads
 message_queue = queue.Queue()
+settings_window = None
 
 def create_gear_icon():
     """Create the gear icon (⚙️) dynamically if it doesn't already exist."""
@@ -211,106 +212,115 @@ received_message_color = "#167F8D"  # Default color for received messages
 
 # Function to open the settings window
 def open_settings():
-    global sent_message_color, received_message_color
-
+    global sent_message_color, received_message_color, settings_window
+    
+    if settings_window is None or not settings_window.winfo_exists():
     # Create a new top-level window for settings
-    settings_window = tk.Toplevel(root)
-    settings_window.title("Settings")
-    settings_window.geometry("300x350")  # Set window size for better layout
+        settings_window = tk.Toplevel(root)
+        settings_window.title("Settings")
+        settings_window.geometry("300x350")  # Set window size for better layout
 
-    # Set the icon for the settings window
-    settings_window.iconbitmap(GEAR_ICON_PATH) 
+        # Background color option
+        def change_bg_color():
+            color = colorchooser.askcolor()[1]
+            if color:
+                chat_log.config(bg=color)
 
-    # Background color option
-    def change_bg_color():
-        color = colorchooser.askcolor()[1]
-        if color:
-            chat_log.config(bg=color)
+            # Font color option for sent messages
+        def change_sent_message_color():
+            global sent_message_color
+            color = colorchooser.askcolor()[1]
+            if color:
+                sent_message_color = color
 
-        # Font color option for sent messages
-    def change_sent_message_color():
-        global sent_message_color
-        color = colorchooser.askcolor()[1]
-        if color:
-            sent_message_color = color
+        # Font color option for received messages
+        def change_received_message_color():
+            global received_message_color
+            color = colorchooser.askcolor()[1]
+            if color:
+                received_message_color = color
 
-    # Font color option for received messages
-    def change_received_message_color():
-        global received_message_color
-        color = colorchooser.askcolor()[1]
-        if color:
-            received_message_color = color
-
-    # Function to safely switch to a new port by re-binding the socket
-    def switch_port(preset_port):
-        global UDP_PORT, sock
-        try:
-            UDP_PORT = preset_port
-            sock.close()  # Close the existing socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a new socket
-            sock.bind(('', UDP_PORT))  # Rebind to the new port
-            tk.messagebox.showinfo("Port Changed", f"Port changed to {UDP_PORT}")
-        except Exception as e:
-            tk.messagebox.showerror("Port Error", f"Failed to bind to port {UDP_PORT}. Error: {e}")
-
-    # Function to enter a custom port
-    def change_custom_port():
-        global UDP_PORT, sock
-        try:
-            new_port = simpledialog.askinteger("Port Settings", "Enter custom Send Port:", initialvalue=UDP_PORT)
-            if new_port:
-                UDP_PORT = new_port
+        # Function to safely switch to a new port by re-binding the socket
+        def switch_port(preset_port):
+            global UDP_PORT, sock
+            try:
+                UDP_PORT = preset_port
                 sock.close()  # Close the existing socket
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a new socket
                 sock.bind(('', UDP_PORT))  # Rebind to the new port
-                tk.messagebox.showinfo("Port Changed", f"Custom port changed to {UDP_PORT}")
-        except Exception as e:
-            tk.messagebox.showerror("Port Error", f"Failed to bind to custom port {UDP_PORT}. Error: {e}")
+                tk.messagebox.showinfo("Port Changed", f"Port changed to {UDP_PORT}")
+            except Exception as e:
+                tk.messagebox.showerror("Port Error", f"Failed to bind to port {UDP_PORT}. Error: {e}")
 
-    def change_custom_channel():
-        global UDP_IP
-        new_ip = simpledialog.askstring("Address Settings", "Enter new broadcast address (e.g., 192.168.1.255):", initialvalue=UDP_IP)
-        if new_ip:
-            UDP_IP = new_ip
+        # Function to enter a custom port
+        def change_custom_port():
+            global UDP_PORT, sock
+            try:
+                new_port = simpledialog.askinteger("Port Settings", "Enter custom Send Port:", initialvalue=UDP_PORT)
+                if new_port:
+                    UDP_PORT = new_port
+                    sock.close()  # Close the existing socket
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Create a new socket
+                    sock.bind(('', UDP_PORT))  # Rebind to the new port
+                    tk.messagebox.showinfo("Port Changed", f"Custom port changed to {UDP_PORT}")
+            except Exception as e:
+                tk.messagebox.showerror("Port Error", f"Failed to bind to custom port {UDP_PORT}. Error: {e}")
 
-    # Beautified layout with sections
-    settings_frame = tk.LabelFrame(settings_window, text="Colour Settings", padx=10, pady=10)
-    settings_frame.pack(pady=10)
+        def change_address():
+            global UDP_IP
+            new_ip = simpledialog.askstring("Address Settings", "Enter new broadcast address (e.g., 192.168.1.255):", initialvalue=UDP_IP)
+            if new_ip:
+                UDP_IP = new_ip
 
-    cs_row_1 = tk.Frame(settings_frame)
-    cs_row_1.pack()
-    tk.Button(cs_row_1, text="Background Colour", width=24, command=change_bg_color).pack(side=tk.TOP, padx=5, pady=5)
+        # Set the icon for the settings window
+        settings_window.iconbitmap(GEAR_ICON_PATH) 
 
-    cs_row_2 = tk.Frame(settings_frame)
-    cs_row_2.pack()
-    tk.Button(cs_row_2, text="Sent Message Colour", width=24, command=change_sent_message_color).pack(side=tk.TOP, padx=5, pady=5)
+        def on_closing():
+                global settings_window
+                settings_window.destroy()
+                settings_window = None  # Reset the global variable when closed
 
-    cs_row_3 = tk.Frame(settings_frame)
-    cs_row_3.pack()
-    tk.Button(cs_row_3, text="Received Message Colour", width=24, command=change_received_message_color).pack(side=tk.TOP, padx=5, pady=5)
+        settings_window.protocol("WM_DELETE_WINDOW", on_closing)  # Handle window close
+        # Beautified layout with sections
+        settings_frame = tk.LabelFrame(settings_window, text="Colour Settings", padx=10, pady=10)
+        settings_frame.pack(pady=10)
 
-    # Port selection section
-    port_frame = tk.LabelFrame(settings_window, text="Select Port", padx=10, pady=10)
-    port_frame.pack(pady=10, padx=10, fill="both")
+        cs_row_1 = tk.Frame(settings_frame)
+        cs_row_1.pack()
+        tk.Button(cs_row_1, text="Background Colour", width=24, command=change_bg_color).pack(side=tk.TOP, padx=5, pady=5)
 
-    pf_row_1 = tk.Frame(port_frame)
-    pf_row_1.pack()
-    tk.Button(pf_row_1, text="12345", width=8, command=lambda: switch_port(12345)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(pf_row_1, text="22222", width=8, command=lambda: switch_port(22222)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(pf_row_1, text="33333", width=8, command=lambda: switch_port(33333)).pack(side=tk.LEFT, padx=5, pady=5)
+        cs_row_2 = tk.Frame(settings_frame)
+        cs_row_2.pack()
+        tk.Button(cs_row_2, text="Sent Message Colour", width=24, command=change_sent_message_color).pack(side=tk.TOP, padx=5, pady=5)
 
-    pf_row_2 = tk.Frame(port_frame)
-    pf_row_2.pack() 
-    tk.Button(pf_row_2, text="44444", width=12, command=lambda: switch_port(44444)).pack(side=tk.LEFT, padx=5, pady=5)
-    tk.Button(pf_row_2, text="Custom Channel", width=15, command=change_custom_port).pack(side=tk.LEFT, padx=5, pady=5)
+        cs_row_3 = tk.Frame(settings_frame)
+        cs_row_3.pack()
+        tk.Button(cs_row_3, text="Received Message Colour", width=24, command=change_received_message_color).pack(side=tk.TOP, padx=5, pady=5)
 
+        # Port selection section
+        port_frame = tk.LabelFrame(settings_window, text="Select Channel (Port)", padx=10, pady=10)
+        port_frame.pack(pady=10, padx=10, fill="both")
+
+        pf_row_1 = tk.Frame(port_frame)
+        pf_row_1.pack()
+        tk.Button(pf_row_1, text="12345", width=8, command=lambda: switch_port(12345)).pack(side=tk.LEFT, padx=5, pady=5)
+        tk.Button(pf_row_1, text="22222", width=8, command=lambda: switch_port(22222)).pack(side=tk.LEFT, padx=5, pady=5)
+        tk.Button(pf_row_1, text="33333", width=8, command=lambda: switch_port(33333)).pack(side=tk.LEFT, padx=5, pady=5)
+
+        pf_row_2 = tk.Frame(port_frame)
+        pf_row_2.pack() 
+        tk.Button(pf_row_2, text="44444", width=12, command=lambda: switch_port(44444)).pack(side=tk.LEFT, padx=5, pady=5)
+        tk.Button(pf_row_2, text="Custom Channel", width=15, command=change_custom_port).pack(side=tk.LEFT, padx=5, pady=5)
+
+        # Custom channel button
+        channel_button = tk.Button(settings_window, text="Change Broadcast Address", command=change_address)
+        channel_button.pack(pady=5)
     
-
-    # Custom channel button
-    channel_button = tk.Button(settings_window, text="Change Broadcast Address", command=change_custom_channel)
-    channel_button.pack(pady=5)
-
-
+    else:
+        # If it exists, just raise it to the front
+        settings_window.lift()
+        settings_window.focus_force()
+    
 # Use this dynamically detected broadcast address in your configuration
 UDP_IP = broadcast_address if broadcast_address else '192.168.1.255'  # Fallback to hardcoded value if detection fails
 UDP_PORT = 12345
