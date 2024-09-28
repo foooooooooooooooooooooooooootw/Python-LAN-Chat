@@ -1,6 +1,6 @@
-#V2.9 28/9/24
-#Fix for settings button being able to open multiple settings windows
-#TODO Progress bar of some sort for file uploads, threading so the GUI doesn't get blocked
+#V2.10 29/9/24
+#Add upload progress bar, ability to cancel uploads and prevent main thread from getting blocked by uploads 
+#TODO fix not being able to receive messages while uploading
 #TODO add video player?
 
 import subprocess
@@ -21,6 +21,7 @@ def install_dependencies():
 install_dependencies()
 
 import tkinter as tk
+from tkinter import ttk
 from tkinter import filedialog, colorchooser, simpledialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
@@ -372,6 +373,16 @@ def download_icon():
             print(f"Error downloading Icon: {e}")
 
 download_icon()
+cancel_flag = False
+
+def cancel_upload():
+    global cancel_flag
+    cancel_flag = True  # Set the flag to cancel the upload
+    clear_upload_frame()
+    chat_log.config(state=tk.NORMAL)
+    chat_log.insert(tk.END, "Upload canceled.\n", "gray")
+    chat_log.tag_configure("gray", foreground="gray")
+    chat_log.config(state=tk.DISABLED)
 
 # Function to send text messages
 def send_message(event=None):
@@ -407,69 +418,122 @@ def resize_image_if_necessary(image):
         image = image.resize((new_width, new_height), Image.LANCZOS)
     return image
 
-# Function to send image over UDP (with GIF support)
 def send_image_over_udp(image_path):
-    try:
-        # Check if the file is a GIF based on the file extension
-        is_gif = image_path.lower().endswith(".gif")
+    global cancel_flag
+    cancel_flag = False  # Reset the cancel flag
 
-        # Open the file and read its raw data as bytes
-        with open(image_path, 'rb') as file:
-            byte_data = file.read()
+    upload_frame.pack(before=input_frame, fill=tk.X, pady=5)
+    for widget in upload_frame.winfo_children():
+        widget.destroy()  # Remove any existing widgets
 
-        file_name = os.path.basename(image_path)
-        header = f'GIF_FILE_NAME_{file_name}'.encode() if is_gif else f'IMG_FILE_NAME_{file_name}'.encode()
-        sock.sendto(header, (UDP_IP, UDP_PORT))
+    progress_bar = ttk.Progressbar(upload_frame, length=600, mode='determinate')
+    progress_bar.pack(side=tk.LEFT, padx=10)
 
-        total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
-        for i in range(total_chunks):
-            start = i * CHUNK_SIZE
-            end = start + CHUNK_SIZE
-            chunk = byte_data[start:end]
-            chunk_header = f'IMG_CHUNK_{i}_{total_chunks}'.encode()
-            packet = chunk_header + b'\n' + chunk
-            try:
-                sock.sendto(packet, (UDP_IP, UDP_PORT))
-                print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
-            except Exception as e:
-                print(f"Error sending packet {i}: {e}")
+    progress_label = tk.Label(upload_frame, text="0%")
+    progress_label.pack(side=tk.LEFT, padx=10)
 
-        sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))
+    cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
+    cancel_button.pack(side=tk.LEFT, padx=10)
 
-    except Exception as e:
-        print(f"Error sending image: {e}")
+    def upload_image():
+        try:
+            is_gif = image_path.lower().endswith(".gif")
+            with open(image_path, 'rb') as file:
+                byte_data = file.read()
 
-# Function to send document over UDP
+            file_name = os.path.basename(image_path)
+            header = f'GIF_FILE_NAME_{file_name}'.encode() if is_gif else f'IMG_FILE_NAME_{file_name}'.encode()
+            sock.sendto(header, (UDP_IP, UDP_PORT))
+
+            total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for i in range(total_chunks):
+                if cancel_flag:  # Check if upload was canceled
+                    print("Upload canceled")
+                    break
+
+                start = i * CHUNK_SIZE
+                end = start + CHUNK_SIZE
+                chunk = byte_data[start:end]
+                chunk_header = f'IMG_CHUNK_{i}_{total_chunks}'.encode()
+                packet = chunk_header + b'\n' + chunk
+                try:
+                    sock.sendto(packet, (UDP_IP, UDP_PORT))
+                    print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
+                except Exception as e:
+                    print(f"Error sending packet {i}: {e}")
+                
+                # Update progress
+                percent_complete = ((i + 1) / total_chunks) * 100
+                progress_bar['value'] = percent_complete
+                progress_label.config(text=f"{percent_complete:.2f}%")
+
+            sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))
+
+            upload_frame.pack_forget()
+
+        except Exception as e:
+            print(f"Error sending image: {e}")
+
+    # Start the upload in a new thread
+    threading.Thread(target=upload_image, daemon=True).start()
+
 def send_document_over_udp(file_path):
-    try:
-        # Read document file
-        with open(file_path, 'rb') as file:
-            file_data = file.read()
+    global cancel_flag
+    cancel_flag = False  # Reset the cancel flag
 
-        # Extract the file name from the path
-        file_name = os.path.basename(file_path)
+    upload_frame.pack(before=input_frame, fill=tk.X, pady=5)
+    for widget in upload_frame.winfo_children():
+        widget.destroy()  # Remove any existing widgets
 
-        # Send the file name first
-        header = f'DOC_FILE_NAME_{file_name}'.encode()
-        sock.sendto(header, (UDP_IP, UDP_PORT))
+    progress_bar = ttk.Progressbar(upload_frame, length=600, mode='determinate')
+    progress_bar.pack(side=tk.LEFT, padx=10)
 
-        # Split file_data into chunks
-        total_chunks = (len(file_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
-        for i in range(total_chunks):
-            start = i * CHUNK_SIZE
-            end = start + CHUNK_SIZE
-            chunk = file_data[start:end]
-            chunk_header = f'DOC_CHUNK_{i}_{total_chunks}'.encode()
-            packet = chunk_header + b'\n' + chunk
-            try:
-                sock.sendto(packet, (UDP_IP, UDP_PORT))
-                print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
-            except Exception as e:
-                print(f"Error sending packet {i}: {e}")
+    progress_label = tk.Label(upload_frame, text="0%")
+    progress_label.pack(side=tk.LEFT, padx=10)
 
-        sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))
-    except Exception as e:
-        print(f"Error sending document: {e}")
+    cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
+    cancel_button.pack(side=tk.LEFT, padx=10)
+
+    def upload_document():
+        try:
+            with open(file_path, 'rb') as file:
+                file_data = file.read()
+
+            file_name = os.path.basename(file_path)
+            header = f'DOC_FILE_NAME_{file_name}'.encode()
+            sock.sendto(header, (UDP_IP, UDP_PORT))
+
+            total_chunks = (len(file_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for i in range(total_chunks):
+                if cancel_flag:  # Check if upload was canceled
+                    print("Upload canceled")
+                    break
+                
+                start = i * CHUNK_SIZE
+                end = start + CHUNK_SIZE
+                chunk = file_data[start:end]
+                chunk_header = f'DOC_CHUNK_{i}_{total_chunks}'.encode()
+                packet = chunk_header + b'\n' + chunk
+                try:
+                    sock.sendto(packet, (UDP_IP, UDP_PORT))
+                    print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
+                except Exception as e:
+                    print(f"Error sending packet {i}: {e}")
+                
+                # Update progress
+                percent_complete = ((i + 1) / total_chunks) * 100
+                progress_bar['value'] = percent_complete
+                progress_label.config(text=f"{percent_complete:.2f}%")
+
+            sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))
+            
+            upload_frame.pack_forget()
+
+        except Exception as e:
+            print(f"Error sending document: {e}")
+
+    # Start the upload in a new thread
+    threading.Thread(target=upload_document, daemon=True).start()
 
 CHUNK_TIMEOUT = 2
 
@@ -908,6 +972,9 @@ scrollbar = tk.Scrollbar(frame, command=chat_log.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 chat_log.config(yscrollcommand=scrollbar.set)
 
+upload_frame = tk.Frame(root)
+upload_frame.pack(fill=tk.X, pady=5)
+
 # Create the context menu
 context_menu = tk.Menu(frame, tearoff=0)
 context_menu.add_command(label="Copy", command=copy_to_clipboard)
@@ -923,6 +990,8 @@ chat_log.bind("<Control-Insert>", copy_to_clipboard)
 
 input_frame = tk.Frame(root)
 input_frame.pack(pady=5, padx=10, fill=tk.X)
+
+upload_frame.pack_forget()
 
 # Add settings button to the left inside the input frame
 settings_button = tk.Button(input_frame, text="⚙️", command=open_settings)
