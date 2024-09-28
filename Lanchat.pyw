@@ -1,6 +1,7 @@
-#V2.10 29/9/24
-#Add upload progress bar, ability to cancel uploads and prevent main thread from getting blocked by uploads 
-#TODO fix not being able to receive messages while uploading
+#V2.11 29/9/24
+#Add estimated time for uploads
+#Removed a few unused statements
+#TODO Important: fix not being able to receive messages while uploading
 #TODO add video player?
 
 import subprocess
@@ -378,9 +379,8 @@ cancel_flag = False
 def cancel_upload():
     global cancel_flag
     cancel_flag = True  # Set the flag to cancel the upload
-    clear_upload_frame()
     chat_log.config(state=tk.NORMAL)
-    chat_log.insert(tk.END, "Upload canceled.\n", "gray")
+    chat_log.insert(tk.END, "Upload cancelled.\n", "gray")
     chat_log.tag_configure("gray", foreground="gray")
     chat_log.config(state=tk.DISABLED)
 
@@ -446,9 +446,11 @@ def send_image_over_udp(image_path):
             sock.sendto(header, (UDP_IP, UDP_PORT))
 
             total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            start_time = time.time()
+
             for i in range(total_chunks):
-                if cancel_flag:  # Check if upload was canceled
-                    print("Upload canceled")
+                if cancel_flag:  # Check if upload was cancelled
+                    print("Upload cancelled")
                     break
 
                 start = i * CHUNK_SIZE
@@ -465,7 +467,16 @@ def send_image_over_udp(image_path):
                 # Update progress
                 percent_complete = ((i + 1) / total_chunks) * 100
                 progress_bar['value'] = percent_complete
-                progress_label.config(text=f"{percent_complete:.2f}%")
+                elapsed_time = time.time() - start_time  # Calculate elapsed time
+
+                if percent_complete > 0:
+                    # Estimate remaining time
+                    estimated_time_remaining = elapsed_time / (percent_complete / 100) - elapsed_time
+                    estimated_time_remaining_str = f"{int(estimated_time_remaining)} seconds"
+                else:
+                    estimated_time_remaining_str = "Calculating..."
+
+                progress_label.config(text=f"{percent_complete:.2f}% - ETA: {estimated_time_remaining_str}")
 
             sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))
 
@@ -488,7 +499,7 @@ def send_document_over_udp(file_path):
     progress_bar = ttk.Progressbar(upload_frame, length=600, mode='determinate')
     progress_bar.pack(side=tk.LEFT, padx=10)
 
-    progress_label = tk.Label(upload_frame, text="0%")
+    progress_label = tk.Label(upload_frame, text="0% - ETA: Calculating...")
     progress_label.pack(side=tk.LEFT, padx=10)
 
     cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
@@ -504,9 +515,11 @@ def send_document_over_udp(file_path):
             sock.sendto(header, (UDP_IP, UDP_PORT))
 
             total_chunks = (len(file_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            start_time = time.time()
+
             for i in range(total_chunks):
-                if cancel_flag:  # Check if upload was canceled
-                    print("Upload canceled")
+                if cancel_flag:  # Check if upload was cancelled
+                    print("Upload cancelled")
                     break
                 
                 start = i * CHUNK_SIZE
@@ -523,7 +536,16 @@ def send_document_over_udp(file_path):
                 # Update progress
                 percent_complete = ((i + 1) / total_chunks) * 100
                 progress_bar['value'] = percent_complete
-                progress_label.config(text=f"{percent_complete:.2f}%")
+                elapsed_time = time.time() - start_time  # Calculate elapsed time
+
+                if percent_complete > 0:
+                    # Estimate remaining time
+                    estimated_time_remaining = elapsed_time / (percent_complete / 100) - elapsed_time
+                    estimated_time_remaining_str = f"{int(estimated_time_remaining)} seconds"
+                else:
+                    estimated_time_remaining_str = "Calculating..."
+
+                progress_label.config(text=f"{percent_complete:.2f}% - ETA: {estimated_time_remaining_str}")
 
             sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))
             
