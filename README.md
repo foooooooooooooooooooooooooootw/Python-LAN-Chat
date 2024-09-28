@@ -3,19 +3,21 @@
 </p>
 
 # Python LAN Chat
-A simple python GUI chat program that broadcasts on LAN with UDP. 
+A party on your LAN and everyone's invited!
 
-It also listens on LAN on port 12345, so anything sent there will be recorded.
+This is a simple python GUI chat program that broadcasts on LAN with UDP. 
+
+It also listens on LAN on certain ports (default 12345), so anything sent there will be recorded.
 
 Just open the program on any computers you have and all of them will receive the messages/files/images. At the moment I am thinking of making a similar program on mobile phones so that messages and files can be sent cross-platform.
 
-The program does connect to the internet to download 1 icon and 1 placeholder image for files hosted on this repository, after which on subsequent startups it checks if the files exist and if they do should not connect to the internet anymore. 
+The program does connect to the internet to download 1 icon and 1 placeholder image for files hosted on this repository (as well as dependencies if you don't have them and are running the python script instead of the binary) after which on subsequent startups it checks if the files exist and if they do should not connect to the internet anymore. 
 
 On windows resource files are saved to AppData/Local/PythonLANChat.
 
-This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (routers, extenders, wireless access points, walls between device and access point) your mileage may vary.
+This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (i.e. routers, extenders, subnets, firewalls, internet interfaces, walls between device and access point) your mileage may vary. On my home network with computers connected to the same router with ethernet cables, I managed to send a 5+ GB file successfully. 
 
-Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption. Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
+Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption (may change in the future). Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
 
 The .pyw file will typically be the most updated since I don't compile a binary for every new version.
 
