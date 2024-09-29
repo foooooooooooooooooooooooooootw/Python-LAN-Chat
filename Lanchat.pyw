@@ -1,6 +1,11 @@
-#V2.11 29/9/24
-#Add estimated time for uploads
-#Removed a few unused statements
+#V2.12 29/9/24 Many fixes!
+#Add hash displayed beneath files and images. Clicking truncated hash expands it to the full hash.
+#Add multithreading for sending messages, receiving messages etc. This allows for sending and receiving messages while uploading files.
+#Changed file sending logic so that it will retry sending a chunk over and over at an interval of 5ms. 
+#Fixed gifs being treated as static images in the sending logic
+#Cursor now changes to a hand if hovering over an image/document
+#Increased socket buffer size and set it to non-blocking
+
 #TODO Important: fix not being able to receive messages while uploading
 #TODO add video player?
 
@@ -34,6 +39,7 @@ import requests
 import time
 import struct
 import queue
+import hashlib
 
 # Create a queue for safely passing data between threads
 message_queue = queue.Queue()
@@ -211,10 +217,11 @@ else:
 
 sent_message_color = "#CE123E"  # Default color for sent messages
 received_message_color = "#167F8D"  # Default color for received messages
+bg_color = "#FFFFFF"
 
 # Function to open the settings window
 def open_settings():
-    global sent_message_color, received_message_color, settings_window
+    global sent_message_color, received_message_color, settings_window, bg_color
     
     if settings_window is None or not settings_window.winfo_exists():
     # Create a new top-level window for settings
@@ -224,6 +231,7 @@ def open_settings():
 
         # Background color option
         def change_bg_color():
+            global sent_message_color
             color = colorchooser.askcolor()[1]
             if color:
                 chat_log.config(bg=color)
@@ -388,9 +396,15 @@ def cancel_upload():
 def send_message(event=None):
     message = entry.get()
     if message:
-        sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
+        threading.Thread(target=_send_message_thread, args=(message,)).start()
         entry.delete(0, tk.END)
         print(f"Sent message: {message}")  # Debug statement
+
+def _send_message_thread(message):
+    try:
+        sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
+    except Exception as e:
+        print(f"Error sending message: {e}")
 
 # Function to open file dialog and send image
 def send_image():
@@ -421,6 +435,7 @@ def resize_image_if_necessary(image):
 def send_image_over_udp(image_path):
     global cancel_flag
     cancel_flag = False  # Reset the cancel flag
+    chunk_queue = queue.Queue(maxsize=10)  # Buffer of 10 chunks for efficiency
 
     upload_frame.pack(before=input_frame, fill=tk.X, pady=5)
     for widget in upload_frame.winfo_children():
@@ -435,62 +450,77 @@ def send_image_over_udp(image_path):
     cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
     cancel_button.pack(side=tk.LEFT, padx=10)
 
-    def upload_image():
+    # Thread 1: File Reader
+    def file_reader():
         try:
-            is_gif = image_path.lower().endswith(".gif")
             with open(image_path, 'rb') as file:
-                byte_data = file.read()
+                total_chunks = (os.path.getsize(image_path) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                for i in range(total_chunks):
+                    if cancel_flag:
+                        break
+                    chunk = file.read(CHUNK_SIZE)
+                    chunk_queue.put((i, total_chunks, chunk))  # Enqueue the chunk
+                chunk_queue.put(None)  # Signal completion
+        except Exception as e:
+            print(f"Error reading file: {e}")
 
-            file_name = os.path.basename(image_path)
-            header = f'GIF_FILE_NAME_{file_name}'.encode() if is_gif else f'IMG_FILE_NAME_{file_name}'.encode()
-            sock.sendto(header, (UDP_IP, UDP_PORT))
+    # Thread 2: Sender (Runs in parallel with the file_reader)
+    def udp_sender():
+        is_gif = image_path.lower().endswith(".gif")
+        file_name = os.path.basename(image_path)
+        header = f'GIF_FILE_NAME_{file_name}'.encode() if is_gif else f'IMG_FILE_NAME_{file_name}'.encode()
+        sock.sendto(header, (UDP_IP, UDP_PORT))  # Initial file header sent
 
-            total_chunks = (len(byte_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
-            start_time = time.time()
+        start_time = time.time()
 
-            for i in range(total_chunks):
-                if cancel_flag:  # Check if upload was cancelled
-                    print("Upload cancelled")
-                    break
+        try:
+            while True:
+                chunk_data = chunk_queue.get()  # Get the next chunk from the queue
+                if chunk_data is None:
+                    break  # No more chunks to send
 
-                start = i * CHUNK_SIZE
-                end = start + CHUNK_SIZE
-                chunk = byte_data[start:end]
-                chunk_header = f'IMG_CHUNK_{i}_{total_chunks}'.encode()
+                i, total_chunks, chunk = chunk_data
+                chunk_header = f'GIF_CHUNK_{i}_{total_chunks}'.encode() if is_gif else f'IMG_CHUNK_{i}_{total_chunks}'.encode()
                 packet = chunk_header + b'\n' + chunk
-                try:
-                    sock.sendto(packet, (UDP_IP, UDP_PORT))
-                    print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
-                except Exception as e:
-                    print(f"Error sending packet {i}: {e}")
-                
-                # Update progress
+
+                # Indefinite retry until the chunk is sent successfully
+                while True:
+                    try:
+                        sock.sendto(packet, (UDP_IP, UDP_PORT))
+                        print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
+                        break  # Successfully sent the chunk
+                    except BlockingIOError:
+                        time.sleep(0.005)  # Short wait before retrying
+                    except Exception as e:
+                        print(f"Error sending packet {i}: {e}")
+                        break
+
+                # Update progress bar
                 percent_complete = ((i + 1) / total_chunks) * 100
                 progress_bar['value'] = percent_complete
-                elapsed_time = time.time() - start_time  # Calculate elapsed time
+                elapsed_time = time.time() - start_time
 
                 if percent_complete > 0:
-                    # Estimate remaining time
                     estimated_time_remaining = elapsed_time / (percent_complete / 100) - elapsed_time
-                    estimated_time_remaining_str = f"{int(estimated_time_remaining)} seconds"
-                else:
-                    estimated_time_remaining_str = "Calculating..."
+                    progress_label.config(text=f"{percent_complete:.2f}% - ETA: {int(estimated_time_remaining)} seconds")
 
-                progress_label.config(text=f"{percent_complete:.2f}% - ETA: {estimated_time_remaining_str}")
-
-            sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))
-
+            if is_gif:
+                sock.sendto(b'GIF_END', (UDP_IP, UDP_PORT))
+            else:
+                sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))  # End of file transfer
             upload_frame.pack_forget()
-
         except Exception as e:
             print(f"Error sending image: {e}")
+            upload_frame.pack_forget()
 
-    # Start the upload in a new thread
-    threading.Thread(target=upload_image, daemon=True).start()
+    # Start the reader and sender threads
+    threading.Thread(target=file_reader, daemon=True).start()
+    threading.Thread(target=udp_sender, daemon=True).start()
 
 def send_document_over_udp(file_path):
     global cancel_flag
     cancel_flag = False  # Reset the cancel flag
+    chunk_queue = queue.Queue(maxsize=10)  # Buffer of 10 chunks for efficiency
 
     upload_frame.pack(before=input_frame, fill=tk.X, pady=5)
     for widget in upload_frame.winfo_children():
@@ -499,63 +529,74 @@ def send_document_over_udp(file_path):
     progress_bar = ttk.Progressbar(upload_frame, length=600, mode='determinate')
     progress_bar.pack(side=tk.LEFT, padx=10)
 
-    progress_label = tk.Label(upload_frame, text="0% - ETA: Calculating...")
+    progress_label = tk.Label(upload_frame, text="0%")
     progress_label.pack(side=tk.LEFT, padx=10)
 
     cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
     cancel_button.pack(side=tk.LEFT, padx=10)
 
-    def upload_document():
+    # Thread 1: File Reader
+    def file_reader():
         try:
             with open(file_path, 'rb') as file:
-                file_data = file.read()
+                total_chunks = (os.path.getsize(file_path) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                for i in range(total_chunks):
+                    if cancel_flag:
+                        break
+                    chunk = file.read(CHUNK_SIZE)
+                    chunk_queue.put((i, total_chunks, chunk))  # Enqueue the chunk
+                chunk_queue.put(None)  # Signal completion
+        except Exception as e:
+            print(f"Error reading file: {e}")
 
-            file_name = os.path.basename(file_path)
-            header = f'DOC_FILE_NAME_{file_name}'.encode()
-            sock.sendto(header, (UDP_IP, UDP_PORT))
+    # Thread 2: Sender (Runs in parallel with the file_reader)
+    def udp_sender():
+        file_name = os.path.basename(file_path)
+        header = f'DOC_FILE_NAME_{file_name}'.encode()
+        sock.sendto(header, (UDP_IP, UDP_PORT))  # Initial file header sent
 
-            total_chunks = (len(file_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
-            start_time = time.time()
+        start_time = time.time()
 
-            for i in range(total_chunks):
-                if cancel_flag:  # Check if upload was cancelled
-                    print("Upload cancelled")
-                    break
-                
-                start = i * CHUNK_SIZE
-                end = start + CHUNK_SIZE
-                chunk = file_data[start:end]
+        try:
+            while True:
+                chunk_data = chunk_queue.get()  # Get the next chunk from the queue
+                if chunk_data is None:
+                    break  # No more chunks to send
+
+                i, total_chunks, chunk = chunk_data
                 chunk_header = f'DOC_CHUNK_{i}_{total_chunks}'.encode()
                 packet = chunk_header + b'\n' + chunk
-                try:
-                    sock.sendto(packet, (UDP_IP, UDP_PORT))
-                    print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
-                except Exception as e:
-                    print(f"Error sending packet {i}: {e}")
-                
-                # Update progress
+
+                # Indefinite retry until the chunk is sent successfully
+                while True:
+                    try:
+                        sock.sendto(packet, (UDP_IP, UDP_PORT))
+                        print(f"Sent chunk {i+1}/{total_chunks}, size: {len(packet)} bytes")
+                        break  # Successfully sent the chunk
+                    except BlockingIOError:
+                        time.sleep(0.005)  # Short wait before retrying
+                    except Exception as e:
+                        print(f"Error sending packet {i}: {e}")
+                        break
+
+                # Update progress bar
                 percent_complete = ((i + 1) / total_chunks) * 100
                 progress_bar['value'] = percent_complete
-                elapsed_time = time.time() - start_time  # Calculate elapsed time
+                elapsed_time = time.time() - start_time
 
                 if percent_complete > 0:
-                    # Estimate remaining time
                     estimated_time_remaining = elapsed_time / (percent_complete / 100) - elapsed_time
-                    estimated_time_remaining_str = f"{int(estimated_time_remaining)} seconds"
-                else:
-                    estimated_time_remaining_str = "Calculating..."
+                    progress_label.config(text=f"{percent_complete:.2f}% - ETA: {int(estimated_time_remaining)} seconds")
 
-                progress_label.config(text=f"{percent_complete:.2f}% - ETA: {estimated_time_remaining_str}")
-
-            sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))
-            
+            sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))  # End of file transfer
+            upload_frame.pack_forget()
+        except Exception as e:
+            print(f"Error sending image: {e}")
             upload_frame.pack_forget()
 
-        except Exception as e:
-            print(f"Error sending document: {e}")
-
-    # Start the upload in a new thread
-    threading.Thread(target=upload_document, daemon=True).start()
+    # Start the reader and sender threads
+    threading.Thread(target=file_reader, daemon=True).start()
+    threading.Thread(target=udp_sender, daemon=True).start()
 
 CHUNK_TIMEOUT = 2
 
@@ -578,21 +619,14 @@ def receive():
 
             # Add the received data to the queue for processing in the main thread
             message_queue.put((sender_ip, data))
+        
+        except BlockingIOError:
+            # No data available, continue
+            continue
 
         except Exception as e:
             print(f"Error receiving data: {e}")
 
-def reset_transfer_flags():
-    """Helper function to reset the state flags."""
-    global is_image, is_gif, is_document, received_chunks, file_name, last_received_time
-    is_image = False
-    is_gif = False
-    is_document = False
-    received_chunks.clear()
-    file_name = None
-    last_received_time = None
-
-# Function to process messages from the queue in the main thread
 def process_queue():
     global received_chunks, file_name, is_image, is_gif, is_document, last_received_time
 
@@ -600,88 +634,41 @@ def process_queue():
         while not message_queue.empty():
             sender_ip, data = message_queue.get()
 
-            if data.startswith(b'IMG_FILE_NAME_'):
-                file_name = data.decode().split('IMG_FILE_NAME_')[1]
-                is_image = True
-                is_gif = False
-                is_document = False
-                last_received_time = time.time()
-                print(f"Received image file name: {file_name}")
+            # Check if it's a file transfer message
+            if data.startswith(b'IMG_FILE_NAME_') or data.startswith(b'GIF_FILE_NAME_') or data.startswith(b'DOC_FILE_NAME_'):
+                handle_file_headers(data)
+                continue  # Skip to the next message
 
-            elif data.startswith(b'GIF_FILE_NAME_'):
-                file_name = data.decode().split('GIF_FILE_NAME_')[1]
-                is_gif = True
-                is_image = False
-                is_document = False
-                last_received_time = time.time()
-                print(f"Received GIF file name: {file_name}")
+            if data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_') or data.startswith(b'DOC_CHUNK_'):
+                handle_file_chunk(data, sender_ip)
+                continue  # Skip to the next message
 
-            elif data.startswith(b'IMG_CHUNK_') or data.startswith(b'GIF_CHUNK_'):
-                header, chunk = data.split(b'\n', 1)
-                index, total = map(int, header.decode().split('_')[2:])
-                received_chunks[index] = chunk
-                last_received_time = time.time()
-                print(f"Received image/GIF chunk {index}/{total}")
-
-                if len(received_chunks) == total:
-                    complete_data = b''.join(received_chunks[i] for i in range(total))
-                    received_chunks.clear()
-
-                    try:
-                        if is_gif:
-                            display_gif(None, sender_ip, file_name, complete_data)
-                        else:
-                            image = Image.open(io.BytesIO(complete_data))
-                            display_static_image(image, sender_ip, file_name, complete_data)
-                    except Exception as e:
-                        print(f"Error displaying image/GIF: {e}")
-
-                    finally:
-                        # Always reset the state flags after processing
-                        reset_transfer_flags()
-
-            elif data.startswith(b'DOC_FILE_NAME_'):
-                file_name = data.decode().split('DOC_FILE_NAME_')[1]
-                is_document = True
-                is_image = False
-                is_gif = False
-                last_received_time = time.time()
-                print(f"Received document file name: {file_name}")
-
-            elif data.startswith(b'DOC_CHUNK_'):
-                header, chunk = data.split(b'\n', 1)
-                index, total = map(int, header.decode().split('_')[2:])
-                received_chunks[index] = chunk
-                last_received_time = time.time()
-
-                if len(received_chunks) == total:
-                    try:
-                        complete_data = b''.join(received_chunks[i] for i in range(total))
-                        received_chunks.clear()
-
-                        # Display a placeholder and metadata for the document
-                        display_document_placeholder(file_name, sender_ip, complete_data)
-                    except Exception as e:
-                        print(f"Error displaying document: {e}")
-                    finally:
-                        # Always reset the state flags after processing
-                        reset_transfer_flags()
-            
-            elif data == b'DOC_END':
+            if data == b'DOC_END':
                 print("Document transmission ended.")
                 reset_transfer_flags() 
                 continue
 
-            elif data == b'IMG_END':
+            if data == b'IMG_END':
                 print("Image transmission ended.")
                 reset_transfer_flags()
+                continue
 
-            elif not is_image and not is_gif and not is_document:
-                # Handle as text message
+            if data == b'GIF_END':
+                print("Image transmission ended.")
+                reset_transfer_flags()
+                continue
+
+            # Handle normal text message (if it's not part of file transfer)
+            try:
+                # Try decoding the data as text
                 message = data.decode()
                 display_message(sender_ip, message)
                 print(f"Received message: {message}")
+            except UnicodeDecodeError:
+                # If decoding fails, it's likely binary data, so skip
+                print("Received non-text data, skipping...")
         
+        # Handle timeouts for incomplete file transfers
         if last_received_time and time.time() - last_received_time > CHUNK_TIMEOUT:
             print(f"Timeout reached: discarding incomplete transfer for {file_name}")
             reset_transfer_flags()
@@ -691,6 +678,86 @@ def process_queue():
 
     except Exception as e:
         print(f"Error processing queue: {e}")
+
+# Helper function to handle incoming file headers (image, GIF, document)
+def handle_file_headers(data):
+    global file_name, is_image, is_gif, is_document, last_received_time
+
+    if data.startswith(b'IMG_FILE_NAME_'):
+        file_name = data.decode().split('IMG_FILE_NAME_')[1]
+        is_image = True
+        is_gif = False
+        is_document = False
+        last_received_time = time.time()
+        print(f"Received image file name: {file_name}")
+
+    elif data.startswith(b'GIF_FILE_NAME_'):
+        file_name = data.decode().split('GIF_FILE_NAME_')[1]
+        is_gif = True
+        is_image = False
+        is_document = False
+        last_received_time = time.time()
+        print(f"Received GIF file name: {file_name}")
+
+    elif data.startswith(b'DOC_FILE_NAME_'):
+        file_name = data.decode().split('DOC_FILE_NAME_')[1]
+        is_document = True
+        is_image = False
+        is_gif = False
+        last_received_time = time.time()
+        print(f"Received document file name: {file_name}")
+
+# Helper function to handle incoming file chunks
+def handle_file_chunk(data, sender_ip):
+    global received_chunks, last_received_time
+
+    try:
+        header, chunk = data.split(b'\n', 1)
+        index, total = map(int, header.decode().split('_')[2:])
+        received_chunks[index] = chunk
+        last_received_time = time.time()
+        print(f"Received chunk {index}/{total}")
+
+        if len(received_chunks) == total:
+            # Reassemble the file and process it
+            complete_file = b''.join(received_chunks[i] for i in range(total))
+            received_chunks.clear()
+            process_complete_file(complete_file, sender_ip)
+    
+    except Exception as e:
+        print(f"Error processing file chunk: {e}")
+
+# Function to reset state flags when file transfer completes or times out
+def reset_transfer_flags():
+    global is_image, is_gif, is_document, received_chunks, file_name, last_received_time
+    is_image = False
+    is_gif = False
+    is_document = False
+    received_chunks.clear()
+    file_name = None
+    last_received_time = None
+
+def process_complete_file(complete_data, sender_ip):
+    global is_image, is_gif, is_document, file_name
+
+    try:
+        if is_gif:
+            # Handle complete GIF file
+            display_gif(None, sender_ip, file_name, complete_data)
+        elif is_image:
+            # Handle complete image file
+            image = Image.open(io.BytesIO(complete_data))
+            display_static_image(image, sender_ip, file_name, complete_data)
+        elif is_document:
+            # Handle complete document file
+            display_document_placeholder(file_name, sender_ip, complete_data)
+    except Exception as e:
+        print(f"Error processing file {file_name}: {e}")
+    finally:
+        # Reset the transfer state flags after processing the file
+        reset_transfer_flags()
+
+
 
 # Function to display text messages with proper tagging
 def display_message(sender_ip, message):
@@ -719,16 +786,43 @@ def display_document_placeholder(file_name, sender_ip, complete_doc_data):
             chat_log.insert(tk.END, f"{sender_ip}: \n", "received_message")
 
         # Add a Label for the placeholder image
-        img_label = tk.Label(chat_log, image=photo, bg=chat_log.cget('bg'), bd=0, highlightthickness=0)
+        img_label = tk.Label(chat_log, image=photo, bg=chat_log.cget('bg'), bd=0, highlightthickness=0, cursor="hand2")
         chat_log.window_create(tk.END, window=img_label)
         chat_log.insert(tk.END, '\n')
 
         # Add gray text metadata below the image
         file_size_kb = len(complete_doc_data) / 1024  # Calculate file size in KB
+        sha1 = hashlib.sha1()
+        try:
+            sha1.update(complete_doc_data)  # Directly update with the binary data
+            digest = sha1.hexdigest()  # Get the hex digest
+        except Exception as e:
+            digest = None
+            print(f"Error calculating hash: {e}")   
+
         metadata_text = f"{file_name} - {file_size_kb:.2f} KB"
+        short_hash = digest[:8] if digest else "Error"
         chat_log.insert(tk.END, metadata_text + "\n", "gray")
         chat_log.tag_configure("gray", foreground="gray")
 
+        hash_label = tk.Label(chat_log, text=short_hash, fg="gray", cursor="hand2")
+        chat_log.window_create(tk.END, window=hash_label)
+        chat_log.insert(tk.END, '\n')
+
+        # Toggle functionality
+        def toggle_hash(event):
+            if hash_label['text'] == short_hash:
+                # Show full hash
+                hash_label.config(text=f"{digest}")
+            else:
+                # Show short hash
+                hash_label.config(text=short_hash)
+
+
+        # Bind the click event to toggle the hash
+        hash_label.bind("<Button-1>", toggle_hash)
+        hash_label.bind("<Enter>", lambda e: hash_label.config(fg="blue"))  # Change color on hover
+        hash_label.bind("<Leave>", lambda e: hash_label.config(fg="gray"))  # Reset color
         # Scroll and disable chat log
         chat_log.yview(tk.END)
         chat_log.config(state=tk.DISABLED)
@@ -761,7 +855,7 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         else:
             chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
 
-        img_label = tk.Label(chat_log, image=photo)
+        img_label = tk.Label(chat_log, bg=chat_log.cget('bg'), image=photo, cursor="hand2")
         chat_log.window_create(tk.END, window=img_label)
         chat_log.insert(tk.END, '\n')
 
@@ -769,11 +863,41 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         metadata_text = f"{file_name} - {file_size_kb:.2f} KB - {original_width}x{original_height} pixels"
         chat_log.insert(tk.END, metadata_text + "\n", "gray")
 
+        sha1 = hashlib.sha1()
+        try:
+            sha1.update(original_image_data)  # Directly update with the binary data
+            digest = sha1.hexdigest()  # Get the hex digest
+        except Exception as e:
+            digest = None
+            print(f"Error calculating hash: {e}")   
+
+        short_hash = digest[:8] if digest else "Error"
+        hash_label = tk.Label(chat_log, text=short_hash, fg="gray", cursor="hand2")
+        chat_log.window_create(tk.END, window=hash_label)
+        chat_log.insert(tk.END, '\n')
+
+        # Toggle functionality
+        def toggle_hash(event):
+            if hash_label['text'] == short_hash:
+                # Show full hash
+                hash_label.config(text=f"{digest}")
+            else:
+                # Show short hash
+                hash_label.config(text=short_hash)
+
         # Define the style for gray-colored text
         chat_log.tag_configure("gray", foreground="gray")
 
         chat_log.config(state=tk.DISABLED)
         chat_log.yview(tk.END)
+
+
+            
+        # Bind the click event to toggle the hash
+        hash_label.bind("<Button-1>", toggle_hash)
+        hash_label.bind("<Enter>", lambda e: hash_label.config(fg="blue"))  # Change color on hover
+        hash_label.bind("<Leave>", lambda e: hash_label.config(fg="gray"))  # Reset color
+
         auto_scroll_chat_log()
 
         # Keep a reference to avoid garbage collection
@@ -807,7 +931,7 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
 
         # Bind the click event to the label
         img_label.bind("<Button-1>", save_image)
-
+    
     except Exception as e:
         print(f"Error displaying static image: {e}")
 
@@ -862,16 +986,40 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
         chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
 
     # Create a label to display the GIF
-    img_label = tk.Label(chat_log)
+    img_label = tk.Label(chat_log, bg=chat_log.cget('bg'), cursor="hand2")
     chat_log.window_create(tk.END, window=img_label)
     chat_log.insert(tk.END, '\n')
+    sha1 = hashlib.sha1()
+    try:
+        sha1.update(original_gif_data)  # Directly update with the binary data
+        digest = sha1.hexdigest()  # Get the hex digest
+    except Exception as e:
+        digest = None
+        print(f"Error calculating hash: {e}")   
 
-    # Add gray text metadata below the GIF
-    metadata_text = f"{file_name} - {file_size_kb:.2f} KB - {original_width}x{original_height} pixels"
+    metadata_text = f"{file_name} - {file_size_kb:.2f} KB"
+    short_hash = digest[:8] if digest else "Error"
     chat_log.insert(tk.END, metadata_text + "\n", "gray")
-
-    # Define the style for gray-colored text
     chat_log.tag_configure("gray", foreground="gray")
+
+    hash_label = tk.Label(chat_log, text=short_hash, fg="gray", cursor="hand2")
+    chat_log.window_create(tk.END, window=hash_label)
+    chat_log.insert(tk.END, '\n')
+
+    # Toggle functionality
+    def toggle_hash(event):
+        if hash_label['text'] == short_hash:
+            # Show full hash
+            hash_label.config(text=f"{digest}")
+        else:
+            # Show short hash
+            hash_label.config(text=short_hash)
+        chat_log.insert(tk.END, '\n')
+
+    # Bind the click event to toggle the hash
+    hash_label.bind("<Button-1>", toggle_hash)
+    hash_label.bind("<Enter>", lambda e: hash_label.config(fg="blue"))  # Change color on hover
+    hash_label.bind("<Leave>", lambda e: hash_label.config(fg="gray"))  # Reset color
 
     chat_log.config(state=tk.DISABLED)
     chat_log.yview(tk.END)
@@ -1047,8 +1195,9 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('', UDP_PORT))
 
 # Increase socket buffer size
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65535)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65535)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 3096 * 1024)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 3096 * 1024)
+sock.setblocking(False)
 
 # Start the queue processing function
 root.after(100, process_queue)
