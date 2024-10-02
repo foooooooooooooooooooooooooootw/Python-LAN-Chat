@@ -15,7 +15,7 @@ The program does connect to the internet to download 1 icon and 1 placeholder im
 
 On windows resource files are saved to AppData/Local/PythonLANChat.
 
-This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (i.e. routers, extenders, subnets, firewalls, internet interfaces, walls between device and access point) your mileage may vary. On my home network with computers connected to the same router with ethernet cables, I managed to send a 5+ GB file successfully. 
+This was tested on my home network with wired connections & no packet loss, so depending on your network configuration (i.e. routers, extenders, subnets, firewalls, internet interfaces, walls between device and access point) your mileage may vary. On my home network with computers connected to the same router with ethernet cables, I managed to send a 5+ GB file successfully. **Best use case is to send smaller files to many computers at once, and all the connections are wired to the same router**.
 
 Point to note: this presumes your network is secure and no one is listening in on you. There is no encryption (may change in the future). Keep this in mind if for some reason you decide to send things over a public network - try not to send sensitive information like private keys.
 
@@ -34,7 +34,7 @@ Top reasons:
   <li> What if internet wasn't available?</li>
   <li> What if you wanted to send it to multiple computers?</li>
   <li> What if it was a big file and there was a file limit like most online services have?</li>
-  <li> Thumbdrives are also a great alternative except it gets real tiring to look for one, plug it in and out of computers etc. and not to mention the transfer speed of USB and the potential file size limit there too (e.g. FAT32 only allows 4GB)</li>
+  <li> Thumbdrives are also a great alternative except it gets real tiring to look for one, plug it in and out of computers etc. especially if you want to distribute a file to many computers</li>
 </ul>
 
 ### Why not leverage TCP or use another programming language?
