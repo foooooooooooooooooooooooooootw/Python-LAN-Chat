@@ -47,4 +47,7 @@ No, it's actually two ethernet cables (one blue and one yellow) intertwined, sim
 ### You're a madman.
 I prefer the title "Inspired by fever dreams".
 
+## Donations
+XMR: **85eQiPvGwmeDdNBVBiNRGrP39RVVPTGJt9S5SE7UJ2y4Roa6fTK3JY86JVtY8KHSCxHmnkjW7qw1eZ7HMoSEApRfG76ovzo**
+
 
