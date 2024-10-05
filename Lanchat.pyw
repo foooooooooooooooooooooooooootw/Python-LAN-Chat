@@ -1,13 +1,10 @@
-#V2.12 29/9/24 Many fixes!
-#Add hash displayed beneath files and images. Clicking truncated hash expands it to the full hash.
-#Add multithreading for sending messages, receiving messages etc. This allows for sending and receiving messages while uploading files.
-#Changed file sending logic so that it will retry sending a chunk over and over at an interval of 5ms. 
-#Fixed gifs being treated as static images in the sending logic
-#Cursor now changes to a hand if hovering over an image/document
-#Increased socket buffer size and set it to non-blocking
+#V2.13 6/10/24
+#Fix for received images using the wrong colour for the ip address
+#Added ability to paste images into program from clipboard
+#Added ability to show hostname instead of IP address. IP address is still default so that we can see what the default subnet we're on is.
 
-#TODO Important: fix not being able to receive messages while uploading
 #TODO add video player?
+#TODO persistent settings?
 
 import subprocess
 import sys
@@ -31,7 +28,7 @@ from tkinter import ttk
 from tkinter import filedialog, colorchooser, simpledialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import socket
-from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFont, ImageChops
+from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFont, ImageChops, ImageGrab
 import io
 import threading
 import os
@@ -221,14 +218,22 @@ bg_color = "#FFFFFF"
 
 # Function to open the settings window
 def open_settings():
-    global sent_message_color, received_message_color, settings_window, bg_color
+    global sent_message_color, received_message_color, settings_window, bg_color, show_hostnames_var
+
+    show_hostnames_var = tk.BooleanVar()
+    show_hostnames_var.set(show_hostnames)
     
     if settings_window is None or not settings_window.winfo_exists():
     # Create a new top-level window for settings
         settings_window = tk.Toplevel(root)
         settings_window.title("Settings")
-        settings_window.geometry("300x350")  # Set window size for better layout
+        settings_window.geometry("300x370")  # Set window size for better layout
 
+        show_hostnames_var.set(show_hostnames)
+
+        def toggle_hostname_display():
+            global show_hostnames
+            show_hostnames = show_hostnames_var.get()
         # Background color option
         def change_bg_color():
             global sent_message_color
@@ -325,6 +330,9 @@ def open_settings():
         # Custom channel button
         channel_button = tk.Button(settings_window, text="Change Broadcast Address", command=change_address)
         channel_button.pack(pady=5)
+
+        hostname_toggle_button = tk.Checkbutton(settings_window, text="Show Hostname instead of IP", variable=show_hostnames_var, command=toggle_hostname_display)
+        hostname_toggle_button.pack(pady=5)
     
     else:
         # If it exists, just raise it to the front
@@ -402,7 +410,12 @@ def send_message(event=None):
 
 def _send_message_thread(message):
     try:
-        sock.sendto(message.encode(), (UDP_IP, UDP_PORT))
+        # Get the hostname of the local machine
+        hostname = socket.gethostname()
+
+        # Construct message with hostname and content
+        message_with_hostname = f"{hostname}|{message}"
+        sock.sendto(message_with_hostname.encode(), (UDP_IP, UDP_PORT))
     except Exception as e:
         print(f"Error sending message: {e}")
 
@@ -431,6 +444,23 @@ def resize_image_if_necessary(image):
             new_width = int((max_dimension / height) * width)
         image = image.resize((new_width, new_height), Image.LANCZOS)
     return image
+
+def paste_image_from_clipboard():
+    try:
+        # Capture image from clipboard
+        clipboard_image = ImageGrab.grabclipboard()
+        if isinstance(clipboard_image, Image.Image):
+            # Save image to a bytes buffer
+            image_buffer = io.BytesIO()
+            clipboard_image.save(image_buffer, format='PNG')  # Save as PNG
+            image_data = image_buffer.getvalue()
+
+            # Send the image over UDP like other images
+            send_image_data_over_udp(image_data, "clipboard_image.png")  # Use a generic name
+        else:
+            print("No image in clipboard")
+    except Exception as e:
+        print(f"Error pasting image from clipboard: {e}")
 
 def send_image_over_udp(image_path):
     global cancel_flag
@@ -517,6 +547,76 @@ def send_image_over_udp(image_path):
     threading.Thread(target=file_reader, daemon=True).start()
     threading.Thread(target=udp_sender, daemon=True).start()
 
+def send_image_data_over_udp(image_data, file_name):
+    # for pasting images into chat
+    global cancel_flag
+    cancel_flag = False  # Reset the cancel flag
+    chunk_queue = queue.Queue(maxsize=10)  # Buffer of 10 chunks for efficiency
+
+    upload_frame.pack(before=input_frame, fill=tk.X, pady=5)
+    for widget in upload_frame.winfo_children():
+        widget.destroy()  # Remove any existing widgets
+
+    progress_bar = ttk.Progressbar(upload_frame, length=600, mode='determinate')
+    progress_bar.pack(side=tk.LEFT, padx=10)
+
+    progress_label = tk.Label(upload_frame, text="0%")
+    progress_label.pack(side=tk.LEFT, padx=10)
+
+    cancel_button = tk.Button(upload_frame, text="Cancel", command=lambda: cancel_upload())
+    cancel_button.pack(side=tk.LEFT, padx=10)
+
+    # Thread 1: File Reader
+    def data_reader():
+        try:
+            total_chunks = (len(image_data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for i in range(total_chunks):
+                if cancel_flag:
+                    break
+                chunk = image_data[i*CHUNK_SIZE:(i+1)*CHUNK_SIZE]
+                chunk_queue.put((i, total_chunks, chunk))  # Enqueue the chunk
+            chunk_queue.put(None)  # Signal completion
+        except Exception as e:
+            print(f"Error reading image data: {e}")
+
+    # Thread 2: Sender (Runs in parallel with the data_reader)
+    def udp_sender():
+        header = f'IMG_FILE_NAME_{file_name}'.encode()
+        sock.sendto(header, (UDP_IP, UDP_PORT))  # Initial file header sent
+
+        start_time = time.time()
+
+        try:
+            while True:
+                chunk_data = chunk_queue.get()  # Get the next chunk from the queue
+                if chunk_data is None:
+                    break  # No more chunks to send
+
+                i, total_chunks, chunk = chunk_data
+                chunk_header = f'IMG_CHUNK_{i}_{total_chunks}'.encode()
+                packet = chunk_header + b'\n' + chunk
+
+                while True:
+                    try:
+                        sock.sendto(packet, (UDP_IP, UDP_PORT))
+                        break  # Successfully sent the chunk
+                    except BlockingIOError:
+                        time.sleep(0.005)  # Short wait before retrying
+
+                # Update progress bar
+                percent_complete = ((i + 1) / total_chunks) * 100
+                progress_bar['value'] = percent_complete
+
+            sock.sendto(b'IMG_END', (UDP_IP, UDP_PORT))  # End of file transfer
+            upload_frame.pack_forget()
+        except Exception as e:
+            print(f"Error sending image: {e}")
+            upload_frame.pack_forget()
+
+    # Start the reader and sender threads
+    threading.Thread(target=data_reader, daemon=True).start()
+    threading.Thread(target=udp_sender, daemon=True).start()
+
 def send_document_over_udp(file_path):
     global cancel_flag
     cancel_flag = False  # Reset the cancel flag
@@ -588,6 +688,7 @@ def send_document_over_udp(file_path):
                     estimated_time_remaining = elapsed_time / (percent_complete / 100) - elapsed_time
                     progress_label.config(text=f"{percent_complete:.2f}% - ETA: {int(estimated_time_remaining)} seconds")
 
+            time.sleep(0.1)
             sock.sendto(b'DOC_END', (UDP_IP, UDP_PORT))  # End of file transfer
             upload_frame.pack_forget()
         except Exception as e:
@@ -627,8 +728,10 @@ def receive():
         except Exception as e:
             print(f"Error receiving data: {e}")
 
+show_hostnames = False  # Default to showing hostnames
+
 def process_queue():
-    global received_chunks, file_name, is_image, is_gif, is_document, last_received_time
+    global received_chunks, file_name, is_image, is_gif, is_document, last_received_time, show_hostnames
 
     try:
         while not message_queue.empty():
@@ -661,8 +764,13 @@ def process_queue():
             # Handle normal text message (if it's not part of file transfer)
             try:
                 # Try decoding the data as text
-                message = data.decode()
-                display_message(sender_ip, message)
+                decoded = data.decode()
+                sender_hostname, message = decoded.split("|", 1)
+                if show_hostnames:
+                    display_message(sender_hostname, message)
+                else:
+                    display_message(sender_ip, message)
+                
                 print(f"Received message: {message}")
             except UnicodeDecodeError:
                 # If decoding fails, it's likely binary data, so skip
@@ -757,15 +865,19 @@ def process_complete_file(complete_data, sender_ip):
         # Reset the transfer state flags after processing the file
         reset_transfer_flags()
 
-
-
 # Function to display text messages with proper tagging
 def display_message(sender_ip, message):
     chat_log.config(state=tk.NORMAL)  # Enable editing
-    if sender_ip == LOCAL_IP:
-        chat_log.insert(tk.END, f"{sender_ip} (you): {message}\n", ("sent_message",))
+    if show_hostnames == False:
+        if sender_ip == LOCAL_IP:
+            chat_log.insert(tk.END, f"{sender_ip} (you): {message}\n", ("sent_message",))
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}: {message}\n", ("received_message",))
     else:
-        chat_log.insert(tk.END, f"{sender_ip}: {message}\n", ("received_message",))
+        if sender_ip == socket.gethostname():
+            chat_log.insert(tk.END, f"{sender_ip} (you): {message}\n", ("sent_message",))
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}: {message}\n", ("received_message",))
     chat_log.config(state=tk.DISABLED)  # Disable editing after inserting
     chat_log.yview(tk.END)  # Scroll to the end
 
@@ -780,10 +892,16 @@ def display_document_placeholder(file_name, sender_ip, complete_doc_data):
 
         # Display the placeholder image in the chat log
         chat_log.config(state=tk.NORMAL)
-        if sender_ip == LOCAL_IP:
-            chat_log.insert(tk.END, f"{sender_ip} (you):\n", "sent_message")
+        if show_hostnames == False:
+            if sender_ip == LOCAL_IP:
+                chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+            else:
+                chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
         else:
-            chat_log.insert(tk.END, f"{sender_ip}: \n", "received_message")
+            if sender_ip == socket.gethostname():
+                chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+            else:
+                chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
 
         # Add a Label for the placeholder image
         img_label = tk.Label(chat_log, image=photo, bg=chat_log.cget('bg'), bd=0, highlightthickness=0, cursor="hand2")
@@ -850,10 +968,16 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
 
         # Insert a label into the chat log where the image will be displayed
         chat_log.config(state=tk.NORMAL)
-        if sender_ip == LOCAL_IP:
-            chat_log.insert(tk.END, f"{sender_ip} (you): \n", ("sent_message",))
+        if show_hostnames == False:
+            if sender_ip == LOCAL_IP:
+                chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+            else:
+                chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
         else:
-            chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
+            if sender_ip == socket.gethostname():
+                chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+            else:
+                chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
 
         img_label = tk.Label(chat_log, bg=chat_log.cget('bg'), image=photo, cursor="hand2")
         chat_log.window_create(tk.END, window=img_label)
@@ -891,8 +1015,6 @@ def display_static_image(image, sender_ip, file_name, original_image_data):
         chat_log.config(state=tk.DISABLED)
         chat_log.yview(tk.END)
 
-
-            
         # Bind the click event to toggle the hash
         hash_label.bind("<Button-1>", toggle_hash)
         hash_label.bind("<Enter>", lambda e: hash_label.config(fg="blue"))  # Change color on hover
@@ -980,10 +1102,16 @@ def display_gif(gif_image, sender_ip, file_name, original_gif_data, max_display_
 
     # Display the GIF in the chat log
     chat_log.config(state=tk.NORMAL)
-    if sender_ip == LOCAL_IP:
-        chat_log.insert(tk.END, f"{sender_ip} (you): \n", ("sent_message",))
+    if show_hostnames == False:
+        if sender_ip == LOCAL_IP:
+            chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
     else:
-        chat_log.insert(tk.END, f"{sender_ip}: \n", ("sent_message",))
+        if sender_ip == socket.gethostname():
+            chat_log.insert(tk.END, f"{sender_ip} (you):\n", ("sent_message",))
+        else:
+            chat_log.insert(tk.END, f"{sender_ip}:\n", ("received_message",))
 
     # Create a label to display the GIF
     img_label = tk.Label(chat_log, bg=chat_log.cget('bg'), cursor="hand2")
@@ -1126,6 +1254,10 @@ def show_context_menu(event):
     # Display the context menu at the mouse pointer position
     context_menu.post(event.x_root, event.y_root)
 
+def toggle_hostname_display():
+    global show_hostnames
+    show_hostnames = not show_hostnames # Toggle between showing hostname and IP
+
 # Setup GUI
 root = TkinterDnD.Tk()  # Use TkinterDnD.Tk() instead of tk.Tk()
 root.title("Python LAN Chat")
@@ -1154,6 +1286,7 @@ chat_log.bind("<Button-3>", show_context_menu)
 
 # Allow copying with Ctrl+C
 chat_log.bind("<Control-c>", copy_to_clipboard)
+root.bind('<Control-v>', lambda e: paste_image_from_clipboard())
 
 # Optionally, you can also bind Ctrl+Insert for copying
 chat_log.bind("<Control-Insert>", copy_to_clipboard)
