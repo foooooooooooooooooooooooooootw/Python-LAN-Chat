@@ -5,7 +5,9 @@
 # Python LAN Chat
 A party on your LAN and everyone's invited!
 
-This is a simple python GUI chat program that broadcasts on LAN with UDP. 
+🎉 We hit 1000+ LoC! 🎉
+
+This is a relatively simple python GUI chat program that broadcasts on LAN with UDP. 
 
 It also listens on LAN on certain ports (default 12345), so anything sent there will be recorded.
 
@@ -21,10 +23,22 @@ Point to note: this presumes your network is secure and no one is listening in o
 
 The .pyw file will typically be the most updated since I don't compile a binary for every new version.
 
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/foooooooooooooooooooooooooootw/Python-LAN-Chat/main/staticdemo.jpg">
 </p>
+
+# Features
+<ul>
+  <li> Send files to all devices on your subnet!</li>
+  <li> Drag and Drop files to send!</li>
+  <li> Paste images straight from your clipboard!</li>
+  <li> Automatically displays images & GIFs! Still working on video player support.</li>
+  <li> Any files sent are hashed and the hash is displayed!</li>
+  <li> Customizable colours, subnet addresses & ports!</li>
+  <li> Toggle between IP addresses or hostnames for clients on the network.</li>
+  <li> Theoretically no file size limit assuming perfect hardware, connection and no network congestion.</li>
+  <li> All files sent and received are saved to RAM, and can be saved easily to disk by clicking. File name and extensions are preserved.</li>
+</ul>
 
 # FAQ
 ### Why?
